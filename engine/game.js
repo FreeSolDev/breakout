@@ -33,36 +33,41 @@ export class Game {
 
   loop(time) {
     if (!this.running) return;
-    const delta = time - this.lastTime;
-    this.lastTime = time;
-    this.accumulator = Math.min(this.accumulator + delta, this.maxAccumulator);
 
-    while (this.accumulator >= this.timestep) {
-      // Juice system gets first update to set hitstop flag
-      const juice = this.state.juice;
-      if (juice) juice.update(this.timestep / 1000, this.state);
+    try {
+      const delta = time - this.lastTime;
+      this.lastTime = time;
+      this.accumulator = Math.min(this.accumulator + delta, this.maxAccumulator);
 
-      const scaledDt = (this.timestep / 1000) * (this.state.timeScale || 1);
-      if (!this.state.hitstopActive) {
-        for (const sys of this.systems) {
-          if (sys === juice) continue;
-          if (sys.update) sys.update(scaledDt, this.state);
+      while (this.accumulator >= this.timestep) {
+        // Juice system gets first update to set hitstop flag
+        const juice = this.state.juice;
+        if (juice) juice.update(this.timestep / 1000, this.state);
+
+        const scaledDt = (this.timestep / 1000) * (this.state.timeScale || 1);
+        if (!this.state.hitstopActive) {
+          for (const sys of this.systems) {
+            if (sys === juice) continue;
+            if (sys.update) sys.update(scaledDt, this.state);
+          }
+        } else {
+          for (const sys of this.systems) {
+            if (sys === juice) continue;
+            if (sys.hitstopUpdate) sys.hitstopUpdate(scaledDt, this.state);
+          }
         }
-      } else {
-        for (const sys of this.systems) {
-          if (sys === juice) continue;
-          if (sys.hitstopUpdate) sys.hitstopUpdate(scaledDt, this.state);
-        }
+        this.accumulator -= this.timestep;
       }
-      this.accumulator -= this.timestep;
-    }
 
-    const interp = this.accumulator / this.timestep;
+      const interp = this.accumulator / this.timestep;
 
-    // Render directly to canvas at native resolution (CSS handles scaling)
-    this.ctx.clearRect(0, 0, this.width, this.height);
-    for (const sys of this.systems) {
-      if (sys.render) sys.render(this.ctx, interp, this.state);
+      // Render directly to canvas at native resolution (CSS handles scaling)
+      this.ctx.clearRect(0, 0, this.width, this.height);
+      for (const sys of this.systems) {
+        if (sys.render) sys.render(this.ctx, interp, this.state);
+      }
+    } catch (e) {
+      console.error('[Game] loop error:', e);
     }
 
     this.frameCount++;

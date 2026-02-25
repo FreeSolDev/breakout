@@ -503,8 +503,8 @@ export class AISystem {
   updateCommander(dt, id, ai, pos, vel, dist, playerPos, state) {
     const health = state.ecs.get(id, 'health');
 
-    // Phase transition
-    if (health && ai.phase === 1 && health.current <= health.max * 0.5) {
+    // Phase transition (skip if already dead)
+    if (health && ai.phase === 1 && ai.state !== 'dead' && health.current <= health.max * 0.5) {
       ai.phase = 2;
       ai.speed = 55;
       ai.attackCooldown = 0.7;
@@ -687,8 +687,8 @@ export class AISystem {
     const health = state.ecs.get(id, 'health');
     const hpPct = health ? health.current / health.max : 1;
 
-    // Phase transitions
-    if (ai.phase === 1 && hpPct <= 0.5) {
+    // Phase transitions (skip if already dead)
+    if (ai.state !== 'dead' && ai.phase === 1 && hpPct <= 0.5) {
       ai.phase = 2;
       ai.hazardTimer = 6;
       if (state.hud) state.hud.addPopup('FACILITY LOCKDOWN', pos.x, pos.y - 20, '#f80');
@@ -701,7 +701,7 @@ export class AISystem {
           life: 0.6, sizeMin: 2, sizeMax: 4,
         });
       }
-    } else if (ai.phase === 2 && hpPct <= 0.25) {
+    } else if (ai.state !== 'dead' && ai.phase === 2 && hpPct <= 0.25) {
       ai.phase = 3;
       ai.speed = 60;
       ai.attackDamage = 50;

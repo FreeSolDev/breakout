@@ -488,27 +488,30 @@ export class CombatSystem {
       }
 
       if (explode) {
-        this.explodeBeaker(id, proj, pos, ecs, state);
+        this.explodeProjectile(id, proj, pos, ecs, state);
       }
     }
   }
 
-  explodeBeaker(id, proj, pos, ecs, state) {
+  explodeProjectile(id, proj, pos, ecs, state) {
     const { particles } = state;
     const r = proj.radius;
+    const isAcid = proj.weaponType === 'beaker';
 
     // Hitbox centered on explosion, hits all enemies in radius
     const explosionHitbox = {
       x: pos.x - r, y: pos.y - r, w: r * 2, h: r * 2,
       damage: proj.damage,
       type: 'explosion',
-      damageType: 'sharp',
+      damageType: isAcid ? 'sharp' : 'blunt',
       statusEffect: proj.statusEffect,
+      knockbackX: 0,
+      knockbackY: -80,
       owner: proj.owner,
       hitEntities: new Set(),
     };
 
-    const enemies = ecs.queryTag('enemy');
+    const enemies = [...ecs.queryTag('enemy')];
     for (const eid of enemies) {
       const epos = ecs.get(eid, 'position');
       const ecol = ecs.get(eid, 'collider');
@@ -520,22 +523,30 @@ export class CombatSystem {
       }
     }
 
-    // Acid splash effect
-    spawnHitEffect('hit_burn', pos.x, pos.y);
-
-    // Green acid particle burst
-    if (particles) {
-      particles.emit({
-        x: pos.x, y: pos.y, count: 22,
-        speedMin: 40, speedMax: 130,
-        colors: ['#8f8', '#4d4', '#0f0', '#aff', '#fff'],
-        life: 0.5, sizeMin: 1, sizeMax: 3,
-      });
+    // Visual effects based on weapon type
+    if (isAcid) {
+      spawnHitEffect('hit_burn', pos.x, pos.y);
+      if (particles) {
+        particles.emit({
+          x: pos.x, y: pos.y, count: 22,
+          speedMin: 40, speedMax: 130,
+          colors: ['#8f8', '#4d4', '#0f0', '#aff', '#fff'],
+          life: 0.5, sizeMin: 1, sizeMax: 3,
+        });
+      }
+    } else {
+      spawnHitEffect('hit_heavy', pos.x, pos.y);
+      if (particles) {
+        particles.emit({
+          x: pos.x, y: pos.y, count: 15,
+          speedMin: 30, speedMax: 100,
+          colors: ['#fff', '#ffd', '#ff8', '#fa8'],
+          life: 0.4, sizeMin: 1, sizeMax: 3,
+        });
+      }
     }
 
-    // Camera shake
     if (state.camera) state.camera.shake(4, 0.3);
-
     ecs.destroy(id);
   }
 
@@ -823,28 +834,33 @@ export class CombatSystem {
     // Hit particles — blood for sharp, sparks for blunt
     if (pos && particles) {
       const isHeavy = hitbox.type === 'attack_heavy';
+      const isExplosion = hitbox.type === 'explosion';
       const isSharp = hitbox.damageType === 'sharp';
+      // Explosion hits radiate outward from center; regular hits use knockback direction
+      const hitAngle = isExplosion
+        ? Math.atan2(pos.y - (hitbox.y + hitbox.h / 2), pos.x - (hitbox.x + hitbox.w / 2))
+        : Math.atan2(hitbox.knockbackY || 0, hitbox.knockbackX || 0);
       if (isSharp) {
         // Blood pool on floor
         if (state.bloodPools) {
-          state.bloodPools.add(pos.x + (Math.random() - 0.5) * 6, pos.y + (Math.random() - 0.5) * 4, isHeavy ? 6 : 4);
+          state.bloodPools.add(pos.x + (Math.random() - 0.5) * 6, pos.y + (Math.random() - 0.5) * 4, isHeavy || isExplosion ? 6 : 4);
         }
         // Blood splash
         particles.emit({
           x: pos.x, y: pos.y,
-          count: isHeavy ? 18 : 10,
-          speedMin: 40, speedMax: isHeavy ? 160 : 100,
+          count: isHeavy || isExplosion ? 18 : 10,
+          speedMin: 40, speedMax: isHeavy || isExplosion ? 160 : 100,
           colors: ['#c00', '#900', '#f22', '#800'],
-          life: isHeavy ? 0.5 : 0.35,
-          sizeMin: 1, sizeMax: isHeavy ? 3 : 2,
-          angle: Math.atan2(hitbox.knockbackY, hitbox.knockbackX),
-          spread: 1.4,
+          life: isHeavy || isExplosion ? 0.5 : 0.35,
+          sizeMin: 1, sizeMax: isHeavy || isExplosion ? 3 : 2,
+          angle: hitAngle,
+          spread: isExplosion ? Math.PI * 2 : 1.4,
           gravity: 120,
         });
         // Blood droplets (slower, bigger, fall down)
         particles.emit({
           x: pos.x, y: pos.y,
-          count: isHeavy ? 6 : 3,
+          count: isHeavy || isExplosion ? 6 : 3,
           speedMin: 15, speedMax: 50,
           colors: ['#a00', '#700'],
           life: 0.6,
@@ -856,13 +872,13 @@ export class CombatSystem {
         // Spark particles (blunt)
         particles.emit({
           x: pos.x, y: pos.y,
-          count: isHeavy ? 15 : 8,
-          speedMin: 30, speedMax: isHeavy ? 150 : 80,
-          colors: ['#fff', '#ffd', '#ff8'],
-          life: isHeavy ? 0.4 : 0.25,
-          sizeMin: 1, sizeMax: isHeavy ? 3 : 2,
-          angle: Math.atan2(hitbox.knockbackY, hitbox.knockbackX),
-          spread: 1.2,
+          count: isHeavy || isExplosion ? 15 : 8,
+          speedMin: 30, speedMax: isHeavy || isExplosion ? 150 : 80,
+          colors: isExplosion ? ['#f80', '#ff0', '#fff'] : ['#fff', '#ffd', '#ff8'],
+          life: isHeavy || isExplosion ? 0.4 : 0.25,
+          sizeMin: 1, sizeMax: isHeavy || isExplosion ? 3 : 2,
+          angle: hitAngle,
+          spread: isExplosion ? Math.PI * 2 : 1.2,
         });
       }
     }
