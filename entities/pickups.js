@@ -65,6 +65,15 @@ export const UPGRADE_DEFS = {
       if (health) { health.max += 25; health.current += 25; }
     }
   },
+  flashlight: {
+    name: 'FLASHLIGHT',
+    color: '#ffe066',
+    rarity: 'fixed',  // never randomly dropped — placed in rooms only
+    apply(state) {
+      const player = state.ecs.get(state.playerId, 'player');
+      if (player) player.hasFlashlight = true;
+    }
+  },
 };
 
 const COMMON_POOL = Object.entries(UPGRADE_DEFS)

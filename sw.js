@@ -1,9 +1,10 @@
-const CACHE_VERSION = 'breakout-v1';
+const CACHE_VERSION = 'breakout-v2';
 
 // App shell — pre-cached on install for instant offline boot
 const APP_SHELL = [
   './',
   './index.html',
+  './version.json',
   './main.js',
   './wallet.js',
   './manifest.json',
@@ -39,6 +40,7 @@ const APP_SHELL = [
   './systems/destruction.js',
   './systems/entity-collision.js',
   './systems/lighting.js',
+  './systems/fire.js',
   // UI
   './ui/hud.js',
   './ui/menus.js',
@@ -53,6 +55,32 @@ const APP_SHELL = [
   // Tileset
   './assets/tileset/lab_tileset.png',
   './assets/tileset/lab_tileset_metadata.json',
+  // Decor sprites
+  './engine/decor-sprites.js',
+  './assets/decor/dirt_0.png',
+  './assets/decor/dirt_1.png',
+  './assets/decor/dirt_2.png',
+  './assets/decor/dirt_3.png',
+  './assets/decor/dirt_4.png',
+  './assets/decor/dirt_5.png',
+  './assets/decor/flora_0.png',
+  './assets/decor/flora_1.png',
+  './assets/decor/flora_2.png',
+  './assets/decor/flora_3.png',
+  './assets/decor/flora_4.png',
+  './assets/decor/flora_5.png',
+  './assets/decor/alien_0.png',
+  './assets/decor/alien_1.png',
+  './assets/decor/alien_2.png',
+  './assets/decor/alien_3.png',
+  './assets/decor/alien_4.png',
+  './assets/decor/alien_5.png',
+  './assets/decor/alien_6.png',
+  './assets/decor/alien_7.png',
+  './assets/decor/alien_8.png',
+  './assets/decor/alien_9.png',
+  './assets/decor/alien_10.png',
+  './assets/decor/alien_11.png',
 ];
 
 // ------- Install: pre-cache app shell -------

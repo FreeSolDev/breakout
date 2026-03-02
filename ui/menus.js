@@ -172,31 +172,38 @@ export class MenuSystem {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, vw, vh);
 
+    // Scale text to fit narrow portrait screens
+    const narrow = vw < 200;
+    const titleSize = narrow ? Math.max(12, Math.floor(vw * 0.18)) : 32;
+    const textSize = narrow ? Math.max(5, Math.floor(vw * 0.05)) : 10;
+    const hintSize = narrow ? Math.max(4, Math.floor(vw * 0.035)) : 7;
+
     // Title
     ctx.fillStyle = '#e94560';
-    ctx.font = 'bold 32px monospace';
+    ctx.font = `bold ${titleSize}px monospace`;
     const title = 'BREAKOUT';
     ctx.fillText(title, vw / 2 - ctx.measureText(title).width / 2, 100);
 
     // Subtitle
     ctx.fillStyle = '#ddd';
-    ctx.font = '10px monospace';
+    ctx.font = `${textSize}px monospace`;
     const sub = 'A BEAT-EM-UP ROGUELIKE';
-    ctx.fillText(sub, vw / 2 - ctx.measureText(sub).width / 2, 118);
+    ctx.fillText(sub, vw / 2 - ctx.measureText(sub).width / 2, 100 + titleSize * 0.6);
 
     // Blink start prompt
     if (Math.floor(t * 2) % 2 === 0) {
       ctx.fillStyle = '#fff';
-      ctx.font = '10px monospace';
+      ctx.font = `${textSize}px monospace`;
       const start = this.touchMode ? 'TAP TO START' : 'PRESS ATTACK TO START';
       ctx.fillText(start, vw / 2 - ctx.measureText(start).width / 2, 190);
     }
 
     // Controls hint
     ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = '7px monospace';
+    ctx.font = `${hintSize}px monospace`;
     if (this.touchMode) {
-      ctx.fillText('Touch controls will appear on screen', vw / 2 - 120, 255);
+      const hint = 'Touch controls will appear on screen';
+      ctx.fillText(hint, vw / 2 - ctx.measureText(hint).width / 2, 255);
     } else {
       ctx.fillText('WASD/Arrows: Move  |  J/Z: Attack  |  K/X: Heavy  |  L/C: Dash  |  G: Grab  |  E: Interact', 12, 255);
     }
@@ -213,11 +220,22 @@ export class MenuSystem {
     const sign = change >= 0 ? '+' : '';
     const changeStr = `${sign}${change.toFixed(2)}%`;
     const isUp = change >= 0;
+    const abs = Math.abs(change);
+    const diff = abs > 10 ? 'BRUTAL' : abs > 5 ? 'HARD' : abs > 2 ? 'NORMAL' : 'EASY';
 
-    // Background pill
-    ctx.fillStyle = 'rgba(10, 10, 26, 0.85)';
-    const pillW = 108, pillH = 20;
+    // Measure text to auto-size the pill
+    ctx.font = 'bold 7px monospace';
+    const topLine = `SOL  $${price}`;
+    const botLine = `${changeStr}  ${diff}`;
+    const topW = ctx.measureText(topLine).width;
+    const botW = ctx.measureText(botLine).width;
+    const pad = 8;
+    const pillW = Math.max(topW, botW) + pad * 2;
+    const pillH = 20;
     const px = vw - pillW - 4, py = y;
+
+    // Background
+    ctx.fillStyle = 'rgba(10, 10, 26, 0.85)';
     ctx.fillRect(px, py, pillW, pillH);
     ctx.fillStyle = isUp ? 'rgba(74, 222, 128, 0.15)' : 'rgba(239, 68, 68, 0.15)';
     ctx.fillRect(px, py, pillW, pillH);
@@ -226,24 +244,20 @@ export class MenuSystem {
     ctx.fillRect(px, py, pillW, 1);
     ctx.fillRect(px, py + pillH - 1, pillW, 1);
 
-    // SOL label + price
+    // Top row: SOL  $price (centered)
     ctx.font = 'bold 7px monospace';
+    const topX = px + pillW / 2 - topW / 2;
     ctx.fillStyle = '#aaa';
-    ctx.fillText('SOL', px + 4, py + 8);
+    ctx.fillText('SOL', topX, py + 8);
     ctx.fillStyle = '#fff';
-    ctx.fillText(`$${price}`, px + 24, py + 8);
+    ctx.fillText(`$${price}`, topX + ctx.measureText('SOL  ').width, py + 8);
 
-    // 24h change
+    // Bottom row: change%  difficulty (centered)
+    const botX = px + pillW / 2 - botW / 2;
     ctx.fillStyle = isUp ? '#4ade80' : '#ef4444';
-    ctx.font = 'bold 7px monospace';
-    ctx.fillText(changeStr, px + 4, py + 16);
-
-    // Difficulty hint
+    ctx.fillText(changeStr, botX, py + 16);
     ctx.fillStyle = '#666';
-    ctx.font = '6px monospace';
-    const abs = Math.abs(change);
-    const diff = abs > 10 ? 'BRUTAL' : abs > 5 ? 'HARD' : abs > 2 ? 'NORMAL' : 'EASY';
-    ctx.fillText(diff, px + 60, py + 16);
+    ctx.fillText(diff, botX + ctx.measureText(`${changeStr}  `).width, py + 16);
   }
 
   renderPause(ctx) {
@@ -266,10 +280,14 @@ export class MenuSystem {
 
   renderGameOver(ctx) {
     const t = this._goTimer;
+    const vw = this._vw;
     const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+    const narrow = vw < 200;
 
-    // Consistent left margin — all content left-aligned from here
-    const leftX = this._vw / 2 - 85;
+    // Consistent left margin — clamp so it never goes negative
+    const leftX = narrow ? 4 : vw / 2 - 85;
+    // Right edge for counter numbers
+    const rightX = narrow ? vw - 6 : leftX + 125;
 
     // Background
     ctx.fillStyle = '#0a0a18';
@@ -281,17 +299,19 @@ export class MenuSystem {
       ctx.globalAlpha = titleAlpha;
 
       // Red accent lines sweep in from center
-      const lineW = clamp01(t / 0.4) * 120;
+      const maxLineW = narrow ? vw / 2 - 4 : 120;
+      const lineW = clamp01(t / 0.4) * maxLineW;
       ctx.fillStyle = '#e94560';
-      ctx.fillRect(this._vw / 2 - lineW, 42, lineW * 2, 1);
+      ctx.fillRect(vw / 2 - lineW, 42, lineW * 2, 1);
 
       // Title text
-      ctx.font = 'bold 24px monospace';
+      const titleFont = narrow ? Math.max(10, Math.floor(vw * 0.16)) : 24;
+      ctx.font = `bold ${titleFont}px monospace`;
       const dead = 'YOU DIED';
-      ctx.fillText(dead, this._vw / 2 - ctx.measureText(dead).width / 2, 62);
+      ctx.fillText(dead, vw / 2 - ctx.measureText(dead).width / 2, 62);
 
       // Bottom accent line
-      ctx.fillRect(this._vw / 2 - lineW, 70, lineW * 2, 1);
+      ctx.fillRect(vw / 2 - lineW, 70, lineW * 2, 1);
 
       ctx.globalAlpha = 1;
     }
@@ -312,17 +332,20 @@ export class MenuSystem {
       const counter = Math.min(actual, Math.round(progress * actual));
 
       // Label + counter on same line
+      const labelFont = narrow ? 5 : 8;
+      const numFont = narrow ? 6 : 9;
       ctx.fillStyle = '#888';
-      ctx.font = '8px monospace';
+      ctx.font = `${labelFont}px monospace`;
       ctx.fillText('ENEMIES KILLED', leftX, 96);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 9px monospace';
-      ctx.fillText(`${counter}`, leftX + 120, 96);
+      ctx.font = `bold ${numFont}px monospace`;
+      ctx.fillText(`${counter}`, rightX, 96);
 
-      // Colored squares — left-aligned with label
-      const sqSize = 8;
-      const gap = 2;
-      const perRow = 16;
+      // Colored squares — left-aligned with label, fit to width
+      const availW = (narrow ? vw - 8 : 170);
+      const sqSize = narrow ? 5 : 8;
+      const gap = narrow ? 1 : 2;
+      const perRow = Math.max(4, Math.floor(availW / (sqSize + gap)));
       for (let i = 0; i < displayed; i++) {
         const col = i % perRow;
         const row = Math.floor(i / perRow);
@@ -347,15 +370,15 @@ export class MenuSystem {
 
       // Label + counter on same line
       ctx.fillStyle = '#888';
-      ctx.font = '8px monospace';
+      ctx.font = `${narrow ? 5 : 8}px monospace`;
       ctx.fillText('ROOMS CLEARED', leftX, 131);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 9px monospace';
-      ctx.fillText(`${displayed}`, leftX + 120, 131);
+      ctx.font = `bold ${narrow ? 6 : 9}px monospace`;
+      ctx.fillText(`${displayed}`, rightX, 131);
 
       // Green room squares — left-aligned with label
-      const sqSize = 8;
-      const gap = 2;
+      const sqSize = narrow ? 5 : 8;
+      const gap = narrow ? 1 : 2;
       for (let i = 0; i < displayed; i++) {
         ctx.fillStyle = '#4ade80';
         ctx.fillRect(leftX + i * (sqSize + gap), 139, sqSize, sqSize);
@@ -374,16 +397,17 @@ export class MenuSystem {
 
       // Label + counter on same line
       ctx.fillStyle = '#888';
-      ctx.font = '8px monospace';
+      ctx.font = `${narrow ? 5 : 8}px monospace`;
       ctx.fillText('FLOOR REACHED', leftX, 166);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 9px monospace';
-      ctx.fillText(`${reached}`, leftX + 120, 166);
+      ctx.font = `bold ${narrow ? 6 : 9}px monospace`;
+      ctx.fillText(`${reached}`, rightX, 166);
 
-      // 3 bars — left-aligned with label, staggered reveal
-      const barW = 40;
-      const barH = 10;
-      const barGap = 6;
+      // 3 bars — left-aligned with label, staggered reveal, fit to width
+      const totalBarW = narrow ? vw - 8 : 138;
+      const barGap = narrow ? 3 : 6;
+      const barW = Math.floor((totalBarW - barGap * 2) / 3);
+      const barH = narrow ? 6 : 10;
 
       for (let i = 0; i < 3; i++) {
         const barDelay = frStart + i * 0.15;

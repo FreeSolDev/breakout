@@ -10,6 +10,7 @@ import { JuiceSystem } from './systems/juice.js';
 import { AISystem } from './systems/ai.js';
 import { WEAPON_DEFS } from './entities/weapons.js';
 import { DestructionSystem } from './systems/destruction.js';
+import { FireSystem } from './systems/fire.js';
 import { LightingSystem } from './systems/lighting.js';
 import { EntityCollisionSystem } from './systems/entity-collision.js';
 import { Floor } from './world/floor-gen.js';
@@ -24,6 +25,7 @@ import { BloodPoolSystem } from './engine/blood-pools.js';
 import { loadAllSprites, drawSprite, drawPickupSprite, drawEquippedWeapon } from './engine/character-sprites.js';
 import { loadHitEffects, spawnHitEffect, hitboxToEffectType, updateHitEffects, drawHitEffects, clearHitEffects } from './engine/hit-effects.js';
 import { solPrice, fetchSolPrice, updateSolPrice } from './engine/sol-price.js';
+import { loadDecorTiles, getDirtTile, getFloraTile, getAlienTile, decorLoaded } from './engine/decor-sprites.js';
 
 const TILE = 16;
 
@@ -36,6 +38,7 @@ let _vh = _initShort < 600 ? Math.max(160, Math.round(270 * _initShort / 600)) :
 let _vw = Math.ceil(_vh * (_initSW / _initSH));
 let _hvw = Math.ceil(270 * (_initSW / _initSH)); // HUD virtual width (always 270 height)
 let _hudContentScale = _initShort < 600 ? Math.min(1.3, 600 / _initShort) : 1;
+let _isPortrait = _initSW < _initSH;
 
 const canvas = document.getElementById('game');
 const game = new Game(canvas, _vw, _vh);
@@ -96,7 +99,7 @@ function resizeDisplay() {
 
   // Dynamic virtual height — small screens get fewer virtual pixels = zoom
   const shortDim = Math.min(screenW, screenH);
-  _vh = shortDim < 600 ? Math.max(160, Math.round(270 * shortDim / 600)) : 270;
+  _vh = shortDim < 600 ? Math.max(200, Math.round(270 * shortDim / 400)) : 270;
 
   // Game virtual size (aspect-matched, height controls zoom)
   _vw = Math.ceil(_vh * (screenW / screenH));
@@ -105,7 +108,7 @@ function resizeDisplay() {
   _hvw = Math.ceil(270 * (screenW / screenH));
 
   // Portrait detection (phone held upright — width < height)
-  const _portrait = screenW < screenH;
+  _isPortrait = screenW < screenH;
 
   // Resize game canvas
   canvas.width = _vw;
@@ -122,7 +125,9 @@ function resizeDisplay() {
 
   // Scale HUD elements on small screens (buttons, fonts)
   _hudContentScale = shortDim < 600 ? Math.min(1.3, 600 / shortDim) : 1;
-  input._updateTouchLayout(_hvw, _hudContentScale, _portrait); // touch uses HUD coords
+  // Touch buttons use a smaller scale on narrow portrait screens so they don't dominate
+  const touchScale = (_isPortrait && shortDim < 500) ? Math.max(0.7, shortDim / 600) : _hudContentScale;
+  input._updateTouchLayout(_hvw, touchScale, _isPortrait); // touch uses HUD coords
 
   // Wrap fills screen directly (no CSS transform needed)
   const wrap = document.getElementById('game-wrap');
@@ -139,7 +144,7 @@ function resizeDisplay() {
   // Share HUD virtual width and content scale with UI systems
   game.state.vw = _hvw;
   game.state.hudScale = _hudContentScale;
-  game.state.portrait = _portrait;
+  game.state.portrait = _isPortrait;
 }
 window.addEventListener('resize', resizeDisplay);
 window.addEventListener('orientationchange', () => setTimeout(resizeDisplay, 150));
@@ -153,6 +158,7 @@ const juiceSystem = new JuiceSystem();
 const aiSystem = new AISystem();
 const entityCollisionSystem = new EntityCollisionSystem();
 const destructionSystem = new DestructionSystem();
+const fireSystem = new FireSystem();
 
 function initGame() {
   const ecs = new ECS();
@@ -170,10 +176,12 @@ function initGame() {
   game.state.audio = audio;
   game.state.postprocess = postprocess;
   game.state.bloodPools = bloodPools;
+  game.state.fireSystem = fireSystem;
   game.state.wallet = wallet;
   game.state.hudCtx = hudCtx;
   game.state.vw = _hvw;
   game.state.hudScale = _hudContentScale;
+  game.state.portrait = _isPortrait;
 
   // Reset systems
   combatSystem.activeHitboxes = [];
@@ -183,6 +191,7 @@ function initGame() {
   particles.particles = [];
   lighting.clear();
   bloodPools.clear();
+  fireSystem.clear();
 
   // Spawn player
   const playerId = createPlayer(ecs, 0, 0);
@@ -218,6 +227,26 @@ game.addSystem({
 game.addSystem({
   update(dt, state) {
     state.input.pollGamepad();
+
+    // Sync HUD tap zones
+    state.input._walletTapZone = state.hud._walletBtn || null;
+    state.input._hudPanelTapZone = state.hud._panelTapZone || null;
+
+    // Handle wallet button tap (check first — wallet zone is inside panel zone)
+    if (state.input._walletTapped) {
+      state.input._walletTapped = false;
+      state.input._hudPanelTapped = false; // don't also toggle panel
+      if (state.wallet) state.wallet.showOverlay();
+      state.hud._expandTimer = 4; // reset auto-collapse timer
+    }
+
+    // Handle HUD panel tap (toggle collapse/expand)
+    if (state.input._hudPanelTapped) {
+      state.input._hudPanelTapped = false;
+      const hud = state.hud;
+      hud._collapsed = !hud._collapsed;
+      if (!hud._collapsed) hud._expandTimer = 4; // auto-collapse after 4s
+    }
   },
   hitstopUpdate(dt, state) {
     state.input.pollGamepad();
@@ -342,6 +371,14 @@ game.addSystem({
   }
 });
 
+// ─── Fire hazards ───
+game.addSystem({
+  update(dt, state) {
+    if (state._menuBlocking || state._cutsceneBlocking) return;
+    fireSystem.update(dt, state);
+  }
+});
+
 // ─── AI ───
 game.addSystem({
   update(dt, state) {
@@ -387,6 +424,10 @@ game.addSystem({
     if (!fl) return;
 
     if (fl.transitioning) {
+      if (fl.transitionPhase === 'load') {
+        fireSystem.clear();
+        if (hud._tutShowDoorArrow) hud._tutShowDoorArrow = false;
+      }
       fl.updateTransition(dt, state);
     } else {
       // Detect room clear moment
@@ -429,6 +470,125 @@ game.addSystem({
   }
 });
 
+// ─── Static layer builder ───
+function _buildStaticLayer(state) {
+  const tilemap = state.tilemap;
+  const c = document.createElement('canvas');
+  c.width = tilemap.width * TILE;
+  c.height = tilemap.height * TILE;
+  const sctx = c.getContext('2d');
+
+  // Floor checkerboard
+  for (let y = 0; y < tilemap.height; y++) {
+    for (let x = 0; x < tilemap.width; x++) {
+      if (!tilemap.isSolid(x, y)) {
+        sctx.fillStyle = (x + y) % 2 === 0 ? '#16213e' : '#1a1a2e';
+        sctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+      }
+    }
+  }
+
+  // Underground dirt/flora/alien patches (drawn on floor, below wires and walls)
+  if (decorLoaded() && state.groundPatches && state.groundPatches.length > 0) {
+    for (const patch of state.groundPatches) {
+      let img;
+      if (patch.type === 'dirt') img = getDirtTile(patch.tileIndex);
+      else if (patch.type === 'alien') img = getAlienTile(patch.tileIndex);
+      else img = getFloraTile(patch.tileIndex);
+      if (!img) continue;
+      sctx.save();
+      sctx.globalAlpha = patch.alpha;
+      sctx.drawImage(img, patch.x, patch.y, TILE, TILE);
+      sctx.restore();
+    }
+  }
+
+  // Wire glow + core strokes
+  if (state.wires && state.wires.length > 0) {
+    for (const wire of state.wires) {
+      const pts = wire.points;
+      if (pts.length < 2) continue;
+      // Glow pass
+      sctx.save();
+      sctx.globalAlpha = 0.15;
+      sctx.strokeStyle = '#0f0';
+      sctx.lineWidth = 4;
+      sctx.beginPath();
+      sctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        const prev = pts[i - 1];
+        const cur = pts[i];
+        const cpx = (prev.x + cur.x) / 2;
+        const cpy = (prev.y + cur.y) / 2;
+        sctx.quadraticCurveTo(prev.x, prev.y, cpx, cpy);
+      }
+      sctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+      sctx.stroke();
+      // Core pass
+      sctx.globalAlpha = 1;
+      sctx.strokeStyle = '#0a0';
+      sctx.lineWidth = 1;
+      sctx.beginPath();
+      sctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        const prev = pts[i - 1];
+        const cur = pts[i];
+        const cpx = (prev.x + cur.x) / 2;
+        const cpy = (prev.y + cur.y) / 2;
+        sctx.quadraticCurveTo(prev.x, prev.y, cpx, cpy);
+      }
+      sctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+      sctx.stroke();
+      sctx.restore();
+    }
+  }
+
+  // Walls
+  tilemap.renderCollision(sctx);
+
+  // Non-elevator door gradients + edge lines
+  if (state.doorTriggers) {
+    for (const door of state.doorTriggers) {
+      if (door.doorDir === 'elevator') continue;
+      const dark = 'rgba(12, 12, 26, 1)';
+      const clear = 'rgba(12, 12, 26, 0)';
+      let grad;
+      if (door.doorDir === 'N') {
+        grad = sctx.createLinearGradient(0, door.y, 0, door.y + door.h);
+        grad.addColorStop(0, dark);
+        grad.addColorStop(1, clear);
+      } else if (door.doorDir === 'S') {
+        grad = sctx.createLinearGradient(0, door.y, 0, door.y + door.h);
+        grad.addColorStop(0, clear);
+        grad.addColorStop(1, dark);
+      } else if (door.doorDir === 'W') {
+        grad = sctx.createLinearGradient(door.x, 0, door.x + door.w, 0);
+        grad.addColorStop(0, dark);
+        grad.addColorStop(1, clear);
+      } else {
+        grad = sctx.createLinearGradient(door.x, 0, door.x + door.w, 0);
+        grad.addColorStop(0, clear);
+        grad.addColorStop(1, dark);
+      }
+      sctx.fillStyle = grad;
+      sctx.fillRect(door.x, door.y, door.w, door.h);
+      // Subtle edge lines on the wall side
+      sctx.globalAlpha = 0.25;
+      sctx.fillStyle = '#5588aa';
+      if (door.doorDir === 'N' || door.doorDir === 'S') {
+        sctx.fillRect(door.x, door.y, 1, door.h);
+        sctx.fillRect(door.x + door.w - 1, door.y, 1, door.h);
+      } else {
+        sctx.fillRect(door.x, door.y, door.w, 1);
+        sctx.fillRect(door.x, door.y + door.h - 1, door.w, 1);
+      }
+      sctx.globalAlpha = 1;
+    }
+  }
+
+  return c;
+}
+
 // ─── Rendering ───
 game.addSystem({
   render(ctx, interp, state) {
@@ -449,6 +609,12 @@ game.addSystem({
     const tilemap = state.tilemap;
     if (!tilemap) return;
 
+    // Rebuild static layer on room change
+    if (state._staticDirty) {
+      state._staticLayerCanvas = _buildStaticLayer(state);
+      state._staticDirty = false;
+    }
+
     // Background
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, _vw, _vh);
@@ -456,56 +622,14 @@ game.addSystem({
     ctx.save();
     state.camera.apply(ctx);
 
-    // Floor tiles
-    for (let y = 0; y < tilemap.height; y++) {
-      for (let x = 0; x < tilemap.width; x++) {
-        if (!tilemap.isSolid(x, y)) {
-          ctx.fillStyle = (x + y) % 2 === 0 ? '#16213e' : '#1a1a2e';
-          ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
-        }
-      }
+    // Static layer (floor tiles, wire geometry, walls, door gradients)
+    if (state._staticLayerCanvas) {
+      ctx.drawImage(state._staticLayerCanvas, 0, 0);
     }
 
-    // Neon wires (floor decals — below walls)
+    // Neon wire energy pulse (time-animated — stays live)
     if (state.wires && state.wires.length > 0) {
       const wireNow = performance.now() / 1000;
-
-      for (const wire of state.wires) {
-        const pts = wire.points;
-        if (pts.length < 2) continue;
-        // Glow pass
-        ctx.save();
-        ctx.globalAlpha = 0.15;
-        ctx.strokeStyle = '#0f0';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) {
-          const prev = pts[i - 1];
-          const cur = pts[i];
-          const cpx = (prev.x + cur.x) / 2;
-          const cpy = (prev.y + cur.y) / 2;
-          ctx.quadraticCurveTo(prev.x, prev.y, cpx, cpy);
-        }
-        ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-        ctx.stroke();
-        // Core pass
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = '#0a0';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) {
-          const prev = pts[i - 1];
-          const cur = pts[i];
-          const cpx = (prev.x + cur.x) / 2;
-          const cpy = (prev.y + cur.y) / 2;
-          ctx.quadraticCurveTo(prev.x, prev.y, cpx, cpy);
-        }
-        ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-        ctx.stroke();
-        ctx.restore();
-      }
 
       // Energy pulse — one wire at a time, picks a new random wire each cycle
       {
@@ -576,11 +700,11 @@ game.addSystem({
       }
     }
 
-    // Walls
-    tilemap.renderCollision(ctx);
-
     // Blood pools (floor decals — below entities)
     state.bloodPools.render(ctx);
+
+    // Fire hazards (on floor, below entities)
+    fireSystem.render(ctx);
 
     // Cryo pod (broken sleep chamber in start room)
     if (state.cryoPod) {
@@ -667,62 +791,22 @@ game.addSystem({
       ctx.fillRect(px - 12, py - 10, 1, 1);
     }
 
-    // Door openings
+    // Elevator door (time-animated pulsing glow — stays live)
     if (state.doorTriggers) {
       for (const door of state.doorTriggers) {
-        if (door.doorDir === 'elevator') {
-          // Elevator: golden glowing square
-          const pulse = 0.3 + Math.sin(performance.now() / 400) * 0.15;
-          ctx.fillStyle = `rgba(255, 200, 50, ${pulse})`;
-          ctx.fillRect(door.x, door.y, door.w, door.h);
-          ctx.strokeStyle = 'rgba(255, 220, 100, 0.7)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(door.x + 1, door.y + 1, door.w - 2, door.h - 2);
-          // Arrow up icon
-          const ecx = door.x + door.w / 2;
-          const ecy = door.y + door.h / 2;
-          ctx.fillStyle = 'rgba(255, 255, 200, 0.8)';
-          ctx.fillRect(ecx - 1, ecy - 4, 2, 8);
-          ctx.fillRect(ecx - 3, ecy - 2, 6, 2);
-          continue;
-        }
-        // Dark passage with directional fade (solid at wall, fades into room)
-        const dark = 'rgba(12, 12, 26, 1)';
-        const clear = 'rgba(12, 12, 26, 0)';
-        let grad;
-        if (door.doorDir === 'N') {
-          grad = ctx.createLinearGradient(0, door.y, 0, door.y + door.h);
-          grad.addColorStop(0, dark);
-          grad.addColorStop(1, clear);
-        } else if (door.doorDir === 'S') {
-          grad = ctx.createLinearGradient(0, door.y, 0, door.y + door.h);
-          grad.addColorStop(0, clear);
-          grad.addColorStop(1, dark);
-        } else if (door.doorDir === 'W') {
-          grad = ctx.createLinearGradient(door.x, 0, door.x + door.w, 0);
-          grad.addColorStop(0, dark);
-          grad.addColorStop(1, clear);
-        } else {
-          grad = ctx.createLinearGradient(door.x, 0, door.x + door.w, 0);
-          grad.addColorStop(0, clear);
-          grad.addColorStop(1, dark);
-        }
-        ctx.fillStyle = grad;
+        if (door.doorDir !== 'elevator') continue;
+        const pulse = 0.3 + Math.sin(performance.now() / 400) * 0.15;
+        ctx.fillStyle = `rgba(255, 200, 50, ${pulse})`;
         ctx.fillRect(door.x, door.y, door.w, door.h);
-        // Subtle edge lines on the wall side
-        ctx.globalAlpha = 0.25;
-        ctx.fillStyle = '#5588aa';
-        if (door.doorDir === 'N') {
-          ctx.fillRect(door.x, door.y, 1, door.h);
-          ctx.fillRect(door.x + door.w - 1, door.y, 1, door.h);
-        } else if (door.doorDir === 'S') {
-          ctx.fillRect(door.x, door.y, 1, door.h);
-          ctx.fillRect(door.x + door.w - 1, door.y, 1, door.h);
-        } else {
-          ctx.fillRect(door.x, door.y, door.w, 1);
-          ctx.fillRect(door.x, door.y + door.h - 1, door.w, 1);
-        }
-        ctx.globalAlpha = 1;
+        ctx.strokeStyle = 'rgba(255, 220, 100, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(door.x + 1, door.y + 1, door.w - 2, door.h - 2);
+        // Arrow up icon
+        const ecx = door.x + door.w / 2;
+        const ecy = door.y + door.h / 2;
+        ctx.fillStyle = 'rgba(255, 255, 200, 0.8)';
+        ctx.fillRect(ecx - 1, ecy - 4, 2, 8);
+        ctx.fillRect(ecx - 3, ecy - 2, 6, 2);
       }
     }
 
@@ -794,15 +878,17 @@ game.addSystem({
                      eai?.state === 'attack_active' ? '#ff0' :
                      baseColor;
       // Boss mutation: scale original sprite during transition, swap to mutated after
-      let eSpriteType = eai?.type;
+      // Variant suffix: _v1.._v6 for boss visual variants (0 = original, no suffix)
+      const vSuffix = eai?._variant ? `_v${eai._variant}` : '';
+      let eSpriteType = eai?.type + vSuffix;
       let eSpriteScale = undefined;
       const trembleX = eai?._trembleX || 0;
       if (eai?._rageMode) {
-        eSpriteType = eai.type + '_mutated';
+        eSpriteType = eai.type + '_mutated' + vSuffix;
       } else if (eai?._mutateProgress > 0) {
         eSpriteScale = 1 + eai._mutateProgress;
       }
-      const eSpriteDrawn = drawSprite(ctx, eSpriteType, eai?.facingX || 1, eai?.facingY || 0, epos.x + trembleX, epos.y, eSpriteScale);
+      const eSpriteDrawn = drawSprite(ctx, eSpriteType, eai?.facingX ?? 1, eai?.facingY ?? 0, epos.x + trembleX, epos.y, eSpriteScale);
       if (!eSpriteDrawn) {
         ctx.fillStyle = ecolor;
         ctx.fillRect(Math.round(epos.x - half), Math.round(epos.y - half), sz, sz);
@@ -862,8 +948,8 @@ game.addSystem({
           const ey = Math.round(epos.y);
           const lineLen = isBoss ? 50 : 35;
           // Use lunge direction if available, otherwise facing
-          const dirX = eai._lungeDir ? eai._lungeDir.x : (eai._dashDir ? eai._dashDir.x : (eai.facingX || 1));
-          const dirY = eai._lungeDir ? eai._lungeDir.y : (eai._dashDir ? eai._dashDir.y : 0);
+          const dirX = eai._lungeDir ? eai._lungeDir.x : (eai._dashDir ? eai._dashDir.x : (eai.facingX ?? 1));
+          const dirY = eai._lungeDir ? eai._lungeDir.y : (eai._dashDir ? eai._dashDir.y : (eai.facingY ?? 0));
 
           ctx.save();
           ctx.translate(ex, ey);
@@ -897,12 +983,77 @@ game.addSystem({
         ctx.strokeRect(Math.round(epos.x - half), Math.round(epos.y - half), sz, sz);
       }
 
+      // Alert "!" indicator — pixel art exclamation mark above head
+      if (eai?.state === 'alert' && eai._alertStart) {
+        const alertAge = (performance.now() - eai._alertStart) / 1000;
+        // Reveal row by row from bottom over 0.12s (7 rows)
+        const revealRows = Math.min(7, Math.floor(alertAge / 0.017));
+        // Gentle bob after fully revealed
+        const bob = revealRows >= 7 ? Math.sin((alertAge - 0.12) * 6) * 1 : 0;
+        // Pixel-perfect position (integer coords, no scaling)
+        const ax = Math.round(epos.x) - 1;
+        const ay = Math.round(epos.y - half - 11) + Math.round(bob);
+        //  Pixel art "!" — 3px wide, 7px tall:
+        //  .#.  row 0 (top)
+        //  ###  row 1
+        //  .#.  row 2
+        //  .#.  row 3
+        //  .#.  row 4
+        //  ...  row 5 (gap)
+        //  .#.  row 6 (dot)
+        const rows = [
+          [1,0], // row 0: center pixel
+          [0,0],[1,0],[2,0], // row 1: full width
+          [1,0], // row 2: center
+          [1,0], // row 3: center
+          [1,0], // row 4: center
+          // row 5: gap (nothing)
+          [1,2], // row 6: dot (offset y+2 to skip gap row 5)
+        ];
+        // Draw outline first (black), then fill (yellow)
+        // Outline: 1px border around each filled pixel
+        const shown = 7 - revealRows; // start row (reveal bottom-up)
+        // Black outline behind
+        ctx.fillStyle = '#000';
+        for (const [px, extraY] of rows) {
+          const ry = px === 1 && extraY === 2 ? 6 : (px === 0 ? 1 : px === 2 ? 1 : rows.indexOf(rows.find(r => r === [px, extraY])));
+        }
+        // Simpler approach: draw each pixel with outline
+        const pixels = [
+          // [x, y] relative to ax, ay — the "!" shape
+          [1, 0], // top cap
+          [0, 1], [1, 1], [2, 1], // wide row
+          [1, 2], // stem
+          [1, 3], // stem
+          [1, 4], // stem
+          // row 5 = gap
+          [1, 6], // dot
+        ];
+        // Black outline (draw 1px ring around each pixel)
+        ctx.fillStyle = '#000';
+        for (const [px, py] of pixels) {
+          if (py < shown) continue; // row-by-row reveal
+          ctx.fillRect(ax + px - 1, ay + py, 1, 1);
+          ctx.fillRect(ax + px + 1, ay + py, 1, 1);
+          ctx.fillRect(ax + px, ay + py - 1, 1, 1);
+          ctx.fillRect(ax + px, ay + py + 1, 1, 1);
+        }
+        // Yellow fill
+        ctx.fillStyle = '#ff0';
+        for (const [px, py] of pixels) {
+          if (py < shown) continue;
+          ctx.fillRect(ax + px, ay + py, 1, 1);
+        }
+      }
+
       // Facing indicator
       if (eai && eai.state !== 'dead') {
         ctx.fillStyle = isBoss ? '#ff4444' : '#e94560';
+        const fDirX = Math.abs(eai.facingX ?? 1) >= Math.abs(eai.facingY ?? 0) ? ((eai.facingX ?? 1) >= 0 ? 1 : -1) : 0;
+        const fDirY = Math.abs(eai.facingY ?? 0) > Math.abs(eai.facingX ?? 1) ? ((eai.facingY ?? 0) >= 0 ? 1 : -1) : 0;
         ctx.fillRect(
-          Math.round(epos.x + (eai.facingX || 1) * (half - 1) - 1),
-          Math.round(epos.y - 1),
+          Math.round(epos.x + fDirX * (half - 1) - 1),
+          Math.round(epos.y + fDirY * (half - 1) - 1),
           3, 3
         );
       }
@@ -1088,14 +1239,22 @@ game.addSystem({
       else if (player.state === 'grab') pcolor = '#aaf';
       else if (player.state === 'throw') pcolor = '#f0f';
       else if (player.state.startsWith('attack_light')) pcolor = '#ffa';
-      else if (player.state === 'attack_heavy') pcolor = '#f80';
+      else if (player.state === 'attack_heavy') {
+        // Pulsing tint during windup to signal charge-up
+        if (player.attackPhase === 'windup') {
+          pcolor = Math.sin(performance.now() / 50) > 0 ? '#fff' : '#f80';
+        } else {
+          pcolor = '#f80';
+        }
+      }
       const pSpriteDrawn = drawSprite(ctx, 'player', player.facingDirX, player.facingDirY, pos.x, pos.y);
       if (!pSpriteDrawn) {
         ctx.fillStyle = pcolor;
         ctx.fillRect(Math.round(pos.x - 6), Math.round(pos.y - 6), 12, 12);
       } else if (pcolor !== '#e0e0e0') {
-        // State tint overlay when not idle
-        ctx.globalAlpha = 0.45;
+        // State tint overlay when not idle (stronger during heavy windup)
+        const isCharging = player.state === 'attack_heavy' && player.attackPhase === 'windup';
+        ctx.globalAlpha = isCharging ? 0.7 : 0.45;
         ctx.fillStyle = pcolor;
         ctx.fillRect(Math.round(pos.x - 6), Math.round(pos.y - 6), 12, 12);
         ctx.globalAlpha = 1;
@@ -1233,7 +1392,7 @@ game.addSystem({
     }
 
     // Cutscene overlay (dialogue, fades)
-    state.cutscene.render(hCtx, _hvw);
+    state.cutscene.render(hCtx, _hvw, 270);
   }
 });
 
@@ -1250,6 +1409,7 @@ game.addSystem({
 (async () => {
   await loadAllSprites();
   await loadHitEffects();
+  loadDecorTiles(); // fire-and-forget — patches render when ready
   fetchSolPrice(); // fire-and-forget — don't block game start
   game.start();
 })();

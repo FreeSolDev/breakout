@@ -3,6 +3,7 @@ import { getRandomTemplate, ROOM_TEMPLATES } from './room-templates.js';
 import { ENEMY_FACTORIES, createCommander, createWarden } from '../entities/enemies.js';
 import { solPrice } from '../engine/sol-price.js';
 import { createWeaponPickup } from '../entities/weapons.js';
+import { createUpgradePickup } from '../entities/pickups.js';
 import { createProp } from '../entities/props.js';
 
 const TILE = 16;
@@ -55,23 +56,37 @@ export class Floor {
     }
 
     // Assign room types
-    // First room = start, last room = boss, guaranteed cache + rest, rest = combat
-    // Corridors placed as connecting passages between combat rooms
+    // First room = start, boss = farthest room from spawn, guaranteed cache + rest
     const types = new Array(placed.length).fill('combat');
     types[0] = 'start';
-    types[placed.length - 1] = 'boss';
 
-    // Place a rest room and a cache room in the middle
+    // Pick the room farthest from spawn (0,0) as the boss room
+    // This guarantees the boss is never adjacent to start
+    let bossIdx = placed.length - 1;
+    let bestDist = 0;
+    for (let i = 1; i < placed.length; i++) {
+      const dist = Math.abs(placed[i].gx) + Math.abs(placed[i].gy);
+      if (dist > bestDist) {
+        bestDist = dist;
+        bossIdx = i;
+      }
+    }
+    types[bossIdx] = 'boss';
+
+    // Place a rest room and a cache room in the middle (skip boss index)
     if (placed.length > 3) {
       const mid = Math.floor(placed.length / 2);
-      types[mid] = 'rest';
+      const restIdx = mid === bossIdx ? (mid > 1 ? mid - 1 : mid + 1) : mid;
+      types[restIdx] = 'rest';
       if (placed.length > 4) {
-        types[Math.max(1, mid - 1)] = 'cache';
+        let cacheIdx = Math.max(1, restIdx - 1);
+        if (types[cacheIdx] !== 'combat') cacheIdx = Math.min(placed.length - 1, restIdx + 1);
+        if (types[cacheIdx] === 'combat') types[cacheIdx] = 'cache';
       }
     }
 
     // Convert some combat rooms to corridors (rest passages)
-    for (let i = 1; i < placed.length - 1; i++) {
+    for (let i = 1; i < placed.length; i++) {
       if (types[i] !== 'combat') continue;
       // ~25% chance a combat room becomes a corridor passage
       if (Math.random() < 0.25) {
@@ -315,6 +330,19 @@ export class Floor {
       }
     }
 
+    // Spawn upgrades (if template has them)
+    if (tmpl.upgrades) {
+      for (const u of tmpl.upgrades) {
+        const uid = createUpgradePickup(
+          state.ecs,
+          u.x * TILE + TILE / 2,
+          u.y * TILE + TILE / 2,
+          u.type
+        );
+        if (uid !== null) this.spawnedEntityIds.push(uid);
+      }
+    }
+
     // Position player at entry point
     const playerPos = state.ecs.get(state.playerId, 'position');
     if (playerPos) {
@@ -372,6 +400,8 @@ export class Floor {
     const atmo = this.generateAtmosphere(roomIndex, tilemap, tmpl);
     state.fogPatches = atmo.fog;
     state.steamVents = atmo.steam;
+    // Generate underground dirt/flora patches
+    state.groundPatches = this.generateGroundPatches(roomIndex, tilemap, tmpl);
 
     // Add faint white lights at steam vent positions
     for (const vent of atmo.steam) {
@@ -382,6 +412,49 @@ export class Floor {
         color: 'rgba(200, 220, 240, 0.3)',
         intensity: 1,
       });
+    }
+
+    // Add bioluminescent glow under flora & alien patches
+    const floraColors = [
+      'rgba(80, 140, 255, 0.2)',   // blue mushroom
+      'rgba(160, 80, 220, 0.18)',  // purple flower
+      'rgba(80, 220, 100, 0.2)',   // green moss
+      'rgba(60, 200, 210, 0.18)',  // cyan fungi
+      'rgba(140, 80, 240, 0.18)',  // violet crystal
+      'rgba(60, 210, 180, 0.2)',   // teal lichen
+    ];
+    const alienColors = [
+      'rgba(255, 60, 180, 0.3)',   // neon pink tendril
+      'rgba(255, 140, 40, 0.28)',  // orange coral
+      'rgba(200, 255, 60, 0.3)',   // yellow-green spore
+      'rgba(50, 160, 255, 0.35)',  // electric blue crystal
+      'rgba(230, 50, 200, 0.3)',   // magenta jellyfish
+      'rgba(255, 50, 60, 0.28)',   // red flytrap
+      'rgba(220, 240, 255, 0.3)',  // white dandelion
+      'rgba(180, 50, 255, 0.32)',  // purple vortex
+      'rgba(50, 255, 100, 0.3)',   // neon green tentacle
+      'rgba(255, 200, 50, 0.3)',   // golden sunburst
+      'rgba(50, 230, 200, 0.3)',   // teal bubble
+      'rgba(160, 60, 255, 0.32)',  // violet crystal tree
+    ];
+    for (const patch of state.groundPatches) {
+      if (patch.type === 'flora') {
+        state.lighting.addLight({
+          x: patch.x + TILE / 2,
+          y: patch.y + TILE / 2,
+          radius: 20,
+          color: floraColors[patch.tileIndex % floraColors.length],
+          intensity: 1,
+        });
+      } else if (patch.type === 'alien') {
+        state.lighting.addLight({
+          x: patch.x + TILE / 2,
+          y: patch.y + TILE / 2,
+          radius: 28,
+          color: alienColors[patch.tileIndex % alienColors.length],
+          intensity: 1,
+        });
+      }
     }
 
     // Cryo pod decor for start room
@@ -408,6 +481,9 @@ export class Floor {
 
     // Update camera bounds
     state.camera.setBounds(0, 0, tmpl.width * TILE, tmpl.height * TILE);
+
+    // Mark static layer for rebuild
+    state._staticDirty = true;
 
     // Boss room cutscene triggers
     if (room.type === 'boss' && state.cutscene && state.cutsceneFlags) {
@@ -557,6 +633,66 @@ export class Floor {
     }
 
     return { fog, steam };
+  }
+
+  // Generate random underground dirt/flora patches for a room
+  generateGroundPatches(roomIndex, tilemap, tmpl) {
+    // Seeded PRNG (different seed than wires/atmosphere)
+    let seed = (roomIndex + 1) * 3141592653;
+    const rng = () => {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+
+    const patches = [];
+
+    // ~85% of rooms get ground patches
+    if (rng() > 0.85) return patches;
+
+    // Determine patch count based on room area (bigger rooms → more patches)
+    const area = tmpl.width * tmpl.height;
+    const minPatches = 3;
+    const maxPatches = Math.min(12, Math.floor(area / 18));
+    const count = minPatches + Math.floor(rng() * (maxPatches - minPatches + 1));
+
+    for (let i = 0; i < count; i++) {
+      // Find a random floor tile that isn't a wall
+      let fx, fy, attempts = 0;
+      do {
+        fx = 2 + Math.floor(rng() * (tmpl.width - 4));
+        fy = 2 + Math.floor(rng() * (tmpl.height - 4));
+        attempts++;
+      } while (tilemap.isSolid(fx, fy) && attempts < 30);
+      if (attempts >= 30) continue;
+
+      // 35% dirt, 30% flora, 35% alien flora
+      const roll = rng();
+      let type, tileIndex;
+      if (roll < 0.35) {
+        type = 'dirt';
+        tileIndex = Math.floor(rng() * 6);
+      } else if (roll < 0.65) {
+        type = 'flora';
+        tileIndex = Math.floor(rng() * 6);
+      } else {
+        type = 'alien';
+        tileIndex = Math.floor(rng() * 12);
+      }
+
+      patches.push({
+        x: fx * TILE,
+        y: fy * TILE,
+        type,
+        tileIndex,
+        alpha: type === 'dirt' ? 0.5 + rng() * 0.3
+             : type === 'alien' ? 0.7 + rng() * 0.25
+             : 0.6 + rng() * 0.3,
+      });
+    }
+
+    return patches;
   }
 
   // Remove all spawned entities from current room

@@ -278,7 +278,7 @@ export class CutsceneEngine {
     return true;
   }
 
-  render(ctx, vw) {
+  render(ctx, vw, vh) {
     if (!this.active && this._fadeAlpha <= 0 && this._barHeight <= 0) return;
     const w = vw || 480;
 
@@ -298,7 +298,7 @@ export class CutsceneEngine {
 
     // Dialogue box
     if (this.dialogue && this.dialogue.visible) {
-      this.dialogue.render(ctx, w);
+      this.dialogue.render(ctx, w, vh);
     }
   }
 }

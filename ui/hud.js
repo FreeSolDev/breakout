@@ -57,6 +57,12 @@ export class HUD {
     this._tutStepDone = false;  // player performed the action
     this._tutDoneTimer = 0;    // hold briefly after action before next step
     this._weaponPopup = null;  // { name, desc, color, timer, maxTimer }
+    this._tutShowDoorArrow = false; // pulsing arrow toward nearest door after tutorial
+
+    // Collapsible portrait HUD
+    this._collapsed = true;        // starts collapsed
+    this._expandTimer = 0;         // auto-collapse countdown
+    this._panelTapZone = null;     // { x, y, w, h } for touch detection
   }
 
   addPopup(text, x, y, color = '#fff') {
@@ -73,6 +79,7 @@ export class HUD {
     this._tutCompleted = false;
     this._tutStepDone = false;
     this._tutDoneTimer = 0;
+    this._tutShowDoorArrow = false;
   }
 
   // Legacy compat — old code calls showHints()
@@ -111,6 +118,12 @@ export class HUD {
       if (this._weaponPopup.timer <= 0) this._weaponPopup = null;
     }
 
+    // Auto-collapse portrait HUD after timeout
+    if (!this._collapsed && this._expandTimer > 0) {
+      this._expandTimer -= dt;
+      if (this._expandTimer <= 0) this._collapsed = true;
+    }
+
     // Tutorial step advancement — frozen during cutscenes/dialogue
     if (this._tutActive && !this._tutCompleted) {
       if (state && state.cutscene && state.cutscene.active) return;
@@ -144,6 +157,7 @@ export class HUD {
           if (this._tutStep >= TUTORIAL_STEPS.length) {
             this._tutCompleted = true;
             this._tutActive = false;
+            this._tutShowDoorArrow = true;
           }
         }
       }
@@ -162,151 +176,276 @@ export class HUD {
     this._hs = hs;
     const ecs = state.ecs;
     const playerId = state.playerId;
+    this._walletBtn = null; // reset each frame; set in portrait branch below
 
-    // ── Status Panel (top-left) ──
     const phealth = ecs.get(playerId, 'health');
     const pcombat = ecs.get(playerId, 'combat');
-    const panX = 3, panY = 2, panW = Math.round(88 * hs), panH = Math.round(26 * hs);
-
-    // Panel background
-    ctx.fillStyle = 'rgba(10, 10, 26, 0.88)';
-    ctx.fillRect(panX, panY, panW, panH);
-
-    // Beveled border (pixel-art raised panel)
-    ctx.fillStyle = '#4a4a5a';
-    ctx.fillRect(panX, panY, panW, 1);           // top highlight
-    ctx.fillRect(panX, panY, 1, panH);           // left highlight
-    ctx.fillStyle = '#1a1a2a';
-    ctx.fillRect(panX, panY + panH - 1, panW, 1); // bottom shadow
-    ctx.fillRect(panX + panW - 1, panY, 1, panH); // right shadow
-
-    // ── Health Row ──
-    if (phealth) {
-      // Red cross icon
-      const crX = Math.round(panX + 4 * hs), crY = Math.round(panY + 6 * hs);
-      ctx.fillStyle = '#e94560';
-      ctx.fillRect(crX, crY, Math.round(5 * hs), Math.max(1, Math.round(hs)));
-      ctx.fillRect(crX + Math.round(2 * hs), crY - Math.round(2 * hs), Math.max(1, Math.round(hs)), Math.round(5 * hs));
-
-      // Health bar
-      const barX = Math.round(panX + 12 * hs), barY = Math.round(panY + 4 * hs);
-      const barW = Math.round(52 * hs), barH = Math.round(5 * hs);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(barX, barY, barW, barH);
-
-      const ratio = Math.max(0, phealth.current / phealth.max);
-      const fillW = Math.max(0, barW * ratio);
-      if (fillW > 0) {
-        ctx.fillStyle = ratio > 0.5 ? '#4ade80' : ratio > 0.25 ? '#f59e0b' : '#ef4444';
-        ctx.fillRect(barX, barY, fillW, barH);
-        ctx.fillStyle = 'rgba(255,255,255,0.15)';
-        ctx.fillRect(barX, barY, fillW, 1);
-      }
-
-      // HP number
-      ctx.fillStyle = '#fff';
-      ctx.font = `${Math.round(6 * hs)}px monospace`;
-      ctx.fillText(`${Math.ceil(phealth.current)}`, barX + barW + 3, barY + barH);
-    }
-
-    // Separator line
-    ctx.fillStyle = '#222';
-    ctx.fillRect(panX + 3, Math.round(panY + 11 * hs), panW - 6, 1);
-
-    // ── Weapon Row ──
-    if (pcombat && pcombat.weapon) {
-      const w = pcombat.weapon;
-      const wy = Math.round(panY + 13 * hs);
-
-      // Color swatch
-      ctx.fillStyle = w.color;
-      ctx.fillRect(panX + 4, wy, Math.round(3 * hs), Math.round(5 * hs));
-
-      // Weapon name
-      ctx.fillStyle = '#ccc';
-      ctx.font = `${Math.round(6 * hs)}px monospace`;
-      ctx.fillText(w.name, Math.round(panX + 9 * hs), wy + Math.round(5 * hs));
-
-      // Durability bar
-      const durX = Math.round(panX + 9 * hs), durY = wy + Math.round(7 * hs);
-      const durW = panW - Math.round(15 * hs), durH = Math.round(2 * hs);
-      const maxDur = w.maxDurability || w.durability;
-      const durRatio = Math.max(0, w.durability / maxDur);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(durX, durY, durW, durH);
-      ctx.fillStyle = durRatio > 0.3 ? w.color : '#ef4444';
-      ctx.fillRect(durX, durY, durW * durRatio, durH);
-    } else if (pcombat) {
-      ctx.fillStyle = '#555';
-      ctx.font = `${Math.round(6 * hs)}px monospace`;
-      ctx.fillText('FISTS', Math.round(panX + 9 * hs), Math.round(panY + 18 * hs));
-    }
-
-    // ── Floor / Room Info (top-right) ──
+    const portrait = state.portrait;
     const fl = state.floor;
     const cutsceneActive = state.cutscene && state.cutscene.active;
-    if (fl && !cutsceneActive) {
-      const room = fl.rooms[fl.currentRoomIndex];
-      const roomNum = fl.currentRoomIndex + 1;
-      const totalRooms = fl.rooms.length;
+    this._portrait = !!portrait;
 
-      // Compute wallet button height in canvas coords so we don't overlap
-      let walletReserve = 0;
-      const walletEl = document.getElementById('cc-header-container');
-      if (walletEl) {
-        const wRect = walletEl.getBoundingClientRect();
-        const cRect = ctx.canvas.getBoundingClientRect();
-        const cScale = cRect.height / 270;
-        walletReserve = Math.ceil((wRect.bottom - cRect.top) / cScale) + 2;
+    // ═══════════════════════════════════════════
+    //  PORTRAIT COLLAPSED — thin health strip
+    // ═══════════════════════════════════════════
+    if (portrait && this._collapsed) {
+      const cW = Math.round(88 * hs);
+      const cX = Math.round(vw / 2 - cW / 2);
+      const cY = 2;
+      const cH = Math.round(12 * hs);
+
+      // Background
+      ctx.fillStyle = 'rgba(10, 10, 26, 0.80)';
+      ctx.fillRect(cX, cY, cW, cH);
+      // Border
+      ctx.fillStyle = '#4a4a5a';
+      ctx.fillRect(cX, cY, cW, 1);
+      ctx.fillRect(cX, cY, 1, cH);
+      ctx.fillStyle = '#1a1a2a';
+      ctx.fillRect(cX, cY + cH - 1, cW, 1);
+      ctx.fillRect(cX + cW - 1, cY, 1, cH);
+
+      // Health bar (compact)
+      if (phealth) {
+        const barX = Math.round(cX + 4 * hs), barY = Math.round(cY + 3 * hs);
+        const barW = Math.round(40 * hs), barH = Math.round(5 * hs);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(barX, barY, barW, barH);
+        const ratio = Math.max(0, phealth.current / phealth.max);
+        const fillW = Math.max(0, barW * ratio);
+        if (fillW > 0) {
+          ctx.fillStyle = ratio > 0.5 ? '#4ade80' : ratio > 0.25 ? '#f59e0b' : '#ef4444';
+          ctx.fillRect(barX, barY, fillW, barH);
+        }
+        // HP number
+        ctx.fillStyle = '#fff';
+        ctx.font = `${Math.round(6 * hs)}px monospace`;
+        ctx.fillText(`${Math.ceil(phealth.current)}`, barX + barW + 2, barY + barH);
       }
 
-      // Right-side panel background (portrait: stack below status panel)
-      const portrait = state.portrait;
-      const rpW = Math.round(58 * hs), rpH = Math.round(18 * hs);
-      const rpX = portrait ? panX : vw - rpW - 3;
-      const rpY = portrait ? panY + panH + 2 : Math.max(2, walletReserve);
+      // Floor info on right side
+      if (fl) {
+        const roomNum = fl.currentRoomIndex + 1;
+        const fText = `F${fl.floorNumber} ${roomNum}/${fl.rooms.length}`;
+        ctx.fillStyle = '#888';
+        ctx.font = `${Math.round(6 * hs)}px monospace`;
+        const ftw = ctx.measureText(fText).width;
+        ctx.fillText(fText, cX + cW - ftw - Math.round(4 * hs), Math.round(cY + 8 * hs));
+      }
+
+      // Expand chevron — small "▼" hint
+      ctx.fillStyle = '#556';
+      const chevX = Math.round(cX + cW / 2);
+      const chevY = cY + cH - 1;
+      ctx.fillRect(chevX - 2, chevY, 5, 1);
+      ctx.fillRect(chevX - 1, chevY + 1, 3, 1);
+      ctx.fillRect(chevX, chevY + 2, 1, 1);
+
+      // Tap zone = entire collapsed bar
+      this._panelTapZone = { x: cX, y: cY, w: cW, h: cH + 3 };
+      this._panelBottom = cY + cH;
+
+      // Enemies alive warning
+      if (fl && !cutsceneActive) {
+        const room = fl.rooms[fl.currentRoomIndex];
+        if (!room.cleared) {
+          const enemies = state.ecs.queryTag('enemy');
+          let alive = 0;
+          for (const eid of enemies) {
+            const ai = state.ecs.get(eid, 'ai');
+            if (ai && ai.state !== 'dead') alive++;
+          }
+          if (alive > 0) {
+            ctx.fillStyle = '#e94560';
+            ctx.font = `${Math.round(7 * hs)}px monospace`;
+            const enemyText = `ENEMIES: ${alive}`;
+            ctx.fillText(enemyText, vw / 2 - ctx.measureText(enemyText).width / 2, 270 - Math.round(18 * hs));
+          }
+        }
+      }
+
+    // ═══════════════════════════════════════════
+    //  FULL PANEL (portrait expanded or landscape)
+    // ═══════════════════════════════════════════
+    } else {
+      const panW = Math.round(88 * hs);
+      const panX = portrait ? Math.round(vw / 2 - panW / 2) : 3;
+      const panY = 2;
+      const panH = Math.round((portrait && fl ? 34 : 26) * hs);
+
+      // Panel background
       ctx.fillStyle = 'rgba(10, 10, 26, 0.88)';
-      ctx.fillRect(rpX, rpY, rpW, rpH);
+      ctx.fillRect(panX, panY, panW, panH);
+      // Beveled border
       ctx.fillStyle = '#4a4a5a';
-      ctx.fillRect(rpX, rpY, rpW, 1);
-      ctx.fillRect(rpX, rpY, 1, rpH);
+      ctx.fillRect(panX, panY, panW, 1);
+      ctx.fillRect(panX, panY, 1, panH);
       ctx.fillStyle = '#1a1a2a';
-      ctx.fillRect(rpX, rpY + rpH - 1, rpW, 1);
-      ctx.fillRect(rpX + rpW - 1, rpY, 1, rpH);
+      ctx.fillRect(panX, panY + panH - 1, panW, 1);
+      ctx.fillRect(panX + panW - 1, panY, 1, panH);
 
-      // Floor + room number
-      const text = `F${fl.floorNumber} ${roomNum}/${totalRooms}`;
-      ctx.fillStyle = '#aaa';
-      ctx.font = `${Math.round(7 * hs)}px monospace`;
-      const tw = ctx.measureText(text).width;
-      ctx.fillText(text, rpX + rpW / 2 - tw / 2, rpY + Math.round(9 * hs));
+      // ── Health Row ──
+      if (phealth) {
+        const crX = Math.round(panX + 4 * hs), crY = Math.round(panY + 6 * hs);
+        ctx.fillStyle = '#e94560';
+        ctx.fillRect(crX, crY, Math.round(5 * hs), Math.max(1, Math.round(hs)));
+        ctx.fillRect(crX + Math.round(2 * hs), crY - Math.round(2 * hs), Math.max(1, Math.round(hs)), Math.round(5 * hs));
 
-      // Room name
-      ctx.fillStyle = '#555';
-      ctx.font = `${Math.round(5 * hs)}px monospace`;
-      const rname = room.template.name;
-      const rnw = ctx.measureText(rname).width;
-      ctx.fillText(rname, rpX + rpW / 2 - rnw / 2, rpY + Math.round(16 * hs));
-
-      // Store layout info for minimap positioning
-      this._portrait = !!portrait;
-      this._panelBottom = rpY + rpH;
-
-      // Room not cleared — enemies remaining warning
-      if (!room.cleared) {
-        const enemies = state.ecs.queryTag('enemy');
-        let alive = 0;
-        for (const eid of enemies) {
-          const ai = state.ecs.get(eid, 'ai');
-          if (ai && ai.state !== 'dead') alive++;
+        const barX = Math.round(panX + 12 * hs), barY = Math.round(panY + 4 * hs);
+        const barW = Math.round(52 * hs), barH = Math.round(5 * hs);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(barX, barY, barW, barH);
+        const ratio = Math.max(0, phealth.current / phealth.max);
+        const fillW = Math.max(0, barW * ratio);
+        if (fillW > 0) {
+          ctx.fillStyle = ratio > 0.5 ? '#4ade80' : ratio > 0.25 ? '#f59e0b' : '#ef4444';
+          ctx.fillRect(barX, barY, fillW, barH);
+          ctx.fillStyle = 'rgba(255,255,255,0.15)';
+          ctx.fillRect(barX, barY, fillW, 1);
         }
-        if (alive > 0) {
-          ctx.fillStyle = '#e94560';
+        ctx.fillStyle = '#fff';
+        ctx.font = `${Math.round(6 * hs)}px monospace`;
+        ctx.fillText(`${Math.ceil(phealth.current)}`, barX + barW + 3, barY + barH);
+      }
+
+      // Separator
+      ctx.fillStyle = '#222';
+      ctx.fillRect(panX + 3, Math.round(panY + 11 * hs), panW - 6, 1);
+
+      // ── Weapon Row ──
+      if (pcombat && pcombat.weapon) {
+        const w = pcombat.weapon;
+        const wy = Math.round(panY + 13 * hs);
+        ctx.fillStyle = w.color;
+        ctx.fillRect(panX + 4, wy, Math.round(3 * hs), Math.round(5 * hs));
+        ctx.fillStyle = '#ccc';
+        ctx.font = `${Math.round(6 * hs)}px monospace`;
+        ctx.fillText(w.name, Math.round(panX + 9 * hs), wy + Math.round(5 * hs));
+        const durX = Math.round(panX + 9 * hs), durY = wy + Math.round(7 * hs);
+        const durW = panW - Math.round(15 * hs), durH = Math.round(2 * hs);
+        const maxDur = w.maxDurability || w.durability;
+        const durRatio = Math.max(0, w.durability / maxDur);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(durX, durY, durW, durH);
+        ctx.fillStyle = durRatio > 0.3 ? w.color : '#ef4444';
+        ctx.fillRect(durX, durY, durW * durRatio, durH);
+      } else if (pcombat) {
+        ctx.fillStyle = '#555';
+        ctx.font = `${Math.round(6 * hs)}px monospace`;
+        ctx.fillText('FISTS', Math.round(panX + 9 * hs), Math.round(panY + 18 * hs));
+      }
+
+      // ── Floor / Room Info ──
+      if (fl && !cutsceneActive) {
+        const room = fl.rooms[fl.currentRoomIndex];
+        const roomNum = fl.currentRoomIndex + 1;
+        const totalRooms = fl.rooms.length;
+        const text = `F${fl.floorNumber} ${roomNum}/${totalRooms}`;
+
+        if (portrait) {
+          // Portrait: floor info as third row
+          ctx.fillStyle = '#222';
+          ctx.fillRect(panX + 3, Math.round(panY + 24 * hs), panW - 6, 1);
+          ctx.fillStyle = '#888';
+          ctx.font = `${Math.round(6 * hs)}px monospace`;
+          ctx.fillText(text, Math.round(panX + 4 * hs), Math.round(panY + 31 * hs));
+        } else {
+          // Landscape: separate panel (top-right)
+          let walletReserve = 0;
+          const walletEl = document.getElementById('cc-header-container');
+          if (walletEl) {
+            const wRect = walletEl.getBoundingClientRect();
+            const cRect = ctx.canvas.getBoundingClientRect();
+            const cScale = cRect.height / 270;
+            walletReserve = Math.ceil((wRect.bottom - cRect.top) / cScale) + 2;
+          }
+          const rpW = Math.round(58 * hs), rpH = Math.round(18 * hs);
+          const rpX = vw - rpW - 3;
+          const rpY = Math.max(2, walletReserve);
+          ctx.fillStyle = 'rgba(10, 10, 26, 0.88)';
+          ctx.fillRect(rpX, rpY, rpW, rpH);
+          ctx.fillStyle = '#4a4a5a';
+          ctx.fillRect(rpX, rpY, rpW, 1);
+          ctx.fillRect(rpX, rpY, 1, rpH);
+          ctx.fillStyle = '#1a1a2a';
+          ctx.fillRect(rpX, rpY + rpH - 1, rpW, 1);
+          ctx.fillRect(rpX + rpW - 1, rpY, 1, rpH);
+          ctx.fillStyle = '#aaa';
           ctx.font = `${Math.round(7 * hs)}px monospace`;
-          ctx.fillText(`ENEMIES: ${alive}`, vw / 2 - Math.round(24 * hs), 270 - 10);
+          const tw = ctx.measureText(text).width;
+          ctx.fillText(text, rpX + rpW / 2 - tw / 2, rpY + Math.round(9 * hs));
+          ctx.fillStyle = '#555';
+          ctx.font = `${Math.round(5 * hs)}px monospace`;
+          const rname = room.template.name;
+          const rnw = ctx.measureText(rname).width;
+          ctx.fillText(rname, rpX + rpW / 2 - rnw / 2, rpY + Math.round(16 * hs));
+          this._panelBottom = rpY + rpH;
         }
+
+        if (portrait) this._panelBottom = panY + panH;
+
+        // ── Portrait Wallet Button ──
+        if (portrait) {
+          const walletObj = state.wallet;
+          const connected = walletObj && walletObj.state && walletObj.state.isConnected;
+          const addr = connected ? walletObj.state.walletAddress : null;
+          const wbY = panY + panH + 2;
+          const wbH = Math.round(12 * hs);
+          ctx.fillStyle = connected ? 'rgba(10, 26, 18, 0.92)' : 'rgba(10, 10, 26, 0.88)';
+          ctx.fillRect(panX, wbY, panW, wbH);
+          ctx.fillStyle = connected ? '#2a5a3a' : '#4a4a5a';
+          ctx.fillRect(panX, wbY, panW, 1);
+          ctx.fillRect(panX, wbY, 1, wbH);
+          ctx.fillStyle = connected ? '#0a2a1a' : '#1a1a2a';
+          ctx.fillRect(panX, wbY + wbH - 1, panW, 1);
+          ctx.fillRect(panX + panW - 1, wbY, 1, wbH);
+          if (connected && addr) {
+            ctx.fillStyle = '#4ade80';
+            ctx.fillRect(Math.round(panX + 4 * hs), wbY + Math.round(4 * hs), Math.round(3 * hs), Math.round(3 * hs));
+            ctx.fillStyle = '#aaa';
+            ctx.font = `${Math.round(6 * hs)}px monospace`;
+            ctx.fillText(addr.slice(0, 4) + '..' + addr.slice(-4), Math.round(panX + 10 * hs), wbY + Math.round(8 * hs));
+          } else {
+            ctx.fillStyle = '#8af';
+            ctx.font = `${Math.round(6 * hs)}px monospace`;
+            const label = 'CONNECT';
+            const lw = ctx.measureText(label).width;
+            ctx.fillText(label, panX + Math.round(panW / 2 - lw / 2), wbY + Math.round(8 * hs));
+          }
+          this._walletBtn = { x: panX, y: wbY, w: panW, h: wbH };
+          this._panelBottom = wbY + wbH;
+        }
+
+        // Enemies alive warning
+        if (!room.cleared) {
+          const enemies = state.ecs.queryTag('enemy');
+          let alive = 0;
+          for (const eid of enemies) {
+            const ai = state.ecs.get(eid, 'ai');
+            if (ai && ai.state !== 'dead') alive++;
+          }
+          if (alive > 0) {
+            const enemyY = portrait ? 270 - Math.round(18 * hs) : 270 - 10;
+            ctx.fillStyle = '#e94560';
+            ctx.font = `${Math.round(7 * hs)}px monospace`;
+            const enemyText = `ENEMIES: ${alive}`;
+            ctx.fillText(enemyText, vw / 2 - ctx.measureText(enemyText).width / 2, enemyY);
+          }
+        }
+      }
+
+      // Tap zone for expanded panel (portrait only — tap to collapse)
+      if (portrait) {
+        const totalH = (this._panelBottom || panY + panH) - panY;
+        this._panelTapZone = { x: panX, y: panY, w: panW, h: totalH };
+      } else {
+        this._panelTapZone = null;
       }
     }
+
+    // Toggle HTML wallet button: hide in portrait (canvas version shown), show in landscape
+    const walletEl = document.getElementById('cc-header-container');
+    if (walletEl) walletEl.style.display = portrait ? 'none' : '';
 
     // --- Banner (ROOM CLEARED, etc) ---
     if (this.banner) {
@@ -341,7 +480,9 @@ export class HUD {
     const hs = this._hs || 1;
 
     const pw = Math.round(70 * hs), ph = Math.round(11 * hs);
-    const px = vw - pw - 3, py = 270 - ph - 3;
+    // Portrait: center at bottom; landscape: bottom-right
+    const px = this._portrait ? Math.round(vw / 2 - pw / 2) : vw - pw - 3;
+    const py = 270 - ph - 3;
 
     ctx.fillStyle = 'rgba(10, 10, 26, 0.8)';
     ctx.fillRect(px, py, pw, ph);
@@ -383,41 +524,42 @@ export class HUD {
 
     const vw = this._vw || 480;
     const hs = this._hs || 1;
-    const barW = Math.round(160 * hs);
-    const barH = Math.round(8 * hs);
-    const bx = vw / 2 - barW / 2;
-    const by = 8;
+    const portrait = this._portrait;
     const ratio = Math.max(0, health.current / health.max);
+
+    // Portrait: compact bar below status panel, clamped to viewport
+    // Landscape: wide bar at top center
+    const barW = portrait ? Math.min(Math.round(100 * hs), vw - 8) : Math.round(160 * hs);
+    const barH = Math.round(portrait ? 6 * hs : 8 * hs);
+    const bx = Math.round(vw / 2 - barW / 2);
+    const by = portrait ? (this._panelBottom || 16) + 3 : 8;
 
     // Boss name
     const name = ai.type === 'warden' ? 'THE WARDEN' : 'COMMANDER';
     ctx.fillStyle = '#e94560';
-    ctx.font = `bold ${Math.round(7 * hs)}px monospace`;
+    ctx.font = `bold ${Math.round((portrait ? 6 : 7) * hs)}px monospace`;
     const nameW = ctx.measureText(name).width;
-    ctx.fillText(name, vw / 2 - nameW / 2 + 5, by - 1);
+    ctx.fillText(name, Math.round(vw / 2 - nameW / 2), by - 1);
 
-    // Skull icon (pixel art, left of the bar)
-    const sx = bx - 12;
-    const sy = by - 1;
-    ctx.fillStyle = '#ddd';
-    // Cranium
-    ctx.fillRect(sx + 1, sy, 8, 6);
-    ctx.fillRect(sx, sy + 1, 10, 4);
-    // Eyes
-    ctx.fillStyle = '#e94560';
-    ctx.fillRect(sx + 2, sy + 2, 2, 2);
-    ctx.fillRect(sx + 6, sy + 2, 2, 2);
-    // Nose
-    ctx.fillStyle = '#aaa';
-    ctx.fillRect(sx + 4, sy + 4, 2, 1);
-    // Jaw
-    ctx.fillStyle = '#bbb';
-    ctx.fillRect(sx + 1, sy + 6, 8, 2);
-    // Teeth
-    ctx.fillStyle = '#e94560';
-    ctx.fillRect(sx + 2, sy + 6, 1, 2);
-    ctx.fillRect(sx + 4, sy + 6, 1, 2);
-    ctx.fillRect(sx + 6, sy + 6, 1, 2);
+    if (!portrait) {
+      // Skull icon (pixel art, left of the bar) — landscape only
+      const sx = bx - 12;
+      const sy = by - 1;
+      ctx.fillStyle = '#ddd';
+      ctx.fillRect(sx + 1, sy, 8, 6);
+      ctx.fillRect(sx, sy + 1, 10, 4);
+      ctx.fillStyle = '#e94560';
+      ctx.fillRect(sx + 2, sy + 2, 2, 2);
+      ctx.fillRect(sx + 6, sy + 2, 2, 2);
+      ctx.fillStyle = '#aaa';
+      ctx.fillRect(sx + 4, sy + 4, 2, 1);
+      ctx.fillStyle = '#bbb';
+      ctx.fillRect(sx + 1, sy + 6, 8, 2);
+      ctx.fillStyle = '#e94560';
+      ctx.fillRect(sx + 2, sy + 6, 1, 2);
+      ctx.fillRect(sx + 4, sy + 6, 1, 2);
+      ctx.fillRect(sx + 6, sy + 6, 1, 2);
+    }
 
     // Bar border
     ctx.fillStyle = '#555';
@@ -425,7 +567,7 @@ export class HUD {
     // Bar background
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(bx, by, barW, barH);
-    // Health fill — gradient from red to dark red
+    // Health fill
     const fillW = Math.max(0, barW * ratio);
     if (fillW > 0) {
       const grad = ctx.createLinearGradient(bx, 0, bx + fillW, 0);
@@ -437,15 +579,17 @@ export class HUD {
     // Notches at 25% intervals
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     for (let i = 1; i < 4; i++) {
-      ctx.fillRect(bx + barW * (i / 4), by, 1, barH);
+      ctx.fillRect(bx + Math.round(barW * (i / 4)), by, 1, barH);
     }
     // Phase indicator dots
     if (ai.phase !== undefined) {
       const totalPhases = ai.type === 'warden' ? 3 : 2;
+      const dotY = portrait ? by + barH + 2 : by + 2;
+      const dotStartX = portrait ? Math.round(vw / 2 - (totalPhases * 6) / 2) : bx + barW + 4;
       for (let i = 1; i <= totalPhases; i++) {
-        const dx = bx + barW + 4 + (i - 1) * 6;
+        const dx = dotStartX + (i - 1) * 6;
         ctx.fillStyle = i <= ai.phase ? '#e94560' : '#333';
-        ctx.fillRect(dx, by + 2, 4, 4);
+        ctx.fillRect(dx, dotY, 4, 4);
       }
     }
     // HP text
@@ -462,9 +606,7 @@ export class HUD {
     const mapX = (this._vw || 480) - mapSize - 2;
     const mapY = (this._panelBottom || 0) + 2;
 
-    // Background
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(mapX - 2, mapY - 2, mapSize + 4, mapSize + 4);
+    // No background — keep minimap lightweight on small screens
 
     // Find grid bounds to center the minimap
     let minGX = Infinity, minGY = Infinity, maxGX = -Infinity, maxGY = -Infinity;
@@ -587,8 +729,9 @@ export class HUD {
 
     const vw = this._vw || 480;
     const hs = this._hs || 1;
-    const popW = Math.round(150 * hs), popH = Math.round(28 * hs);
-    const popX = vw / 2 - popW / 2, popY = 100;
+    const popW = Math.min(Math.round(150 * hs), vw - 8);
+    const popH = Math.round(28 * hs);
+    const popX = Math.round(vw / 2 - popW / 2), popY = 100;
 
     // Panel background
     ctx.fillStyle = 'rgba(10, 10, 26, 0.92)';
@@ -605,24 +748,27 @@ export class HUD {
     ctx.globalAlpha = alpha;
 
     // Accent dashes flanking the name
+    const dashW = Math.min(18, Math.round(popW * 0.12));
     ctx.fillStyle = wp.color;
     ctx.globalAlpha = alpha * 0.4;
-    ctx.fillRect(popX + 6, popY + 11, 18, 1);
-    ctx.fillRect(popX + popW - 24, popY + 11, 18, 1);
+    ctx.fillRect(popX + 6, popY + 11, dashW, 1);
+    ctx.fillRect(popX + popW - dashW - 6, popY + 11, dashW, 1);
     ctx.globalAlpha = alpha;
 
-    // Weapon name (centered)
+    // Weapon name (centered, clamp font to fit)
+    const nameFs = Math.min(Math.round(9 * hs), Math.round(popW * 0.08));
     ctx.fillStyle = wp.color;
-    ctx.font = `bold ${Math.round(9 * hs)}px monospace`;
+    ctx.font = `bold ${nameFs}px monospace`;
     const name = wp.name.toUpperCase();
     const nameW = ctx.measureText(name).width;
-    ctx.fillText(name, vw / 2 - nameW / 2, popY + Math.round(12 * hs));
+    ctx.fillText(name, Math.round(vw / 2 - nameW / 2), popY + Math.round(12 * hs));
 
-    // Description (centered)
+    // Description (centered, clamp font to fit)
+    const descFs = Math.min(Math.round(7 * hs), Math.round(popW * 0.065));
     ctx.fillStyle = '#aaa';
-    ctx.font = `${Math.round(7 * hs)}px monospace`;
+    ctx.font = `${descFs}px monospace`;
     const descW = ctx.measureText(wp.desc).width;
-    ctx.fillText(wp.desc, vw / 2 - descW / 2, popY + Math.round(23 * hs));
+    ctx.fillText(wp.desc, Math.round(vw / 2 - descW / 2), popY + Math.round(23 * hs));
 
     ctx.restore();
   }
@@ -689,6 +835,11 @@ export class HUD {
 
   // Render tutorial prompts above the player (call in world-space, after lighting)
   renderTutorial(ctx, state) {
+    // Door arrow persists after tutorial completes until player enters a door
+    if (this._tutShowDoorArrow) {
+      this._renderDoorArrow(ctx, state);
+    }
+
     if (!this._tutActive || this._tutCompleted) return;
 
     // Hide during cutscenes / dialogue
@@ -814,6 +965,62 @@ export class HUD {
     ctx.fillRect(ax + 1, ay + 10, 1, 1);
     ctx.fillRect(ax - 1, ay + 11, 1, 1);
     ctx.fillRect(ax,     ay + 11, 1, 1);
+
+    ctx.restore();
+  }
+
+  _renderDoorArrow(ctx, state) {
+    const playerPos = state.ecs.get(state.playerId, 'position');
+    if (!playerPos) return;
+    const triggers = state.doorTriggers;
+    if (!triggers || triggers.length === 0) return;
+
+    // Find nearest door trigger center
+    let nearest = null, nearestDist = Infinity;
+    for (const trigger of triggers) {
+      const cx = trigger.x + trigger.w / 2;
+      const cy = trigger.y + trigger.h / 2;
+      const dx = cx - playerPos.x, dy = cy - playerPos.y;
+      const d = dx * dx + dy * dy;
+      if (d < nearestDist) { nearestDist = d; nearest = { x: cx, y: cy }; }
+    }
+    if (!nearest) return;
+
+    const t = performance.now() / 1000;
+    const angle = Math.atan2(nearest.y - playerPos.y, nearest.x - playerPos.x);
+    const pulse = 0.5 + 0.5 * Math.sin(t * 3);
+
+    ctx.save();
+
+    // Draw 3 chevrons along the direction vector, pulsing in sequence
+    for (let i = 0; i < 3; i++) {
+      const offset = 16 + i * 8;
+      const cx = playerPos.x + Math.cos(angle) * offset;
+      const cy = playerPos.y + Math.sin(angle) * offset;
+      // Stagger pulse so chevrons ripple outward
+      const chevPulse = 0.4 + 0.6 * Math.sin(t * 4 - i * 0.8);
+      ctx.globalAlpha = chevPulse * 0.8;
+
+      // Chevron: two angled lines forming a ">" pointing in the direction
+      ctx.save();
+      ctx.translate(Math.round(cx), Math.round(cy));
+      ctx.rotate(angle);
+
+      // Pixel art chevron — draw as small angled rect pairs
+      ctx.fillStyle = '#0ff';
+      // Upper arm of chevron
+      ctx.fillRect(0, -3, 1, 1);
+      ctx.fillRect(1, -2, 1, 1);
+      ctx.fillRect(2, -1, 1, 1);
+      // Tip
+      ctx.fillRect(3, 0, 1, 1);
+      // Lower arm
+      ctx.fillRect(2, 1, 1, 1);
+      ctx.fillRect(1, 2, 1, 1);
+      ctx.fillRect(0, 3, 1, 1);
+
+      ctx.restore();
+    }
 
     ctx.restore();
   }

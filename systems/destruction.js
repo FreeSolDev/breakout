@@ -108,6 +108,19 @@ export class DestructionSystem {
       });
     }
 
+    // Spawn fire hazards around explosion
+    if (state.fireSystem) {
+      const fireCount = 4 + Math.floor(Math.random() * 3); // 4-6 fires
+      for (let i = 0; i < fireCount; i++) {
+        const angle = (i / fireCount) * Math.PI * 2 + Math.random() * 0.5;
+        const dist = 12 + Math.random() * 18;
+        state.fireSystem.spawnFire(
+          pos.x + Math.cos(angle) * dist,
+          pos.y + Math.sin(angle) * dist,
+        );
+      }
+    }
+
     // Chain: damage nearby barrels
     const props = ecs.queryTag('prop');
     for (const pid of props) {
