@@ -80,11 +80,38 @@ export class Input {
     // Tap zone — when set, taps in this rect fire attack (dialogue advance, title start, etc.)
     this._dialogueTapZone = null; // { x, y, w, h }
 
+    // Wallet button tap zone — when set, taps here set _walletTapped flag
+    this._walletTapZone = null; // { x, y, w, h }
+    this._walletTapped = false;
+
+    // HUD panel tap zone — for collapsible portrait HUD
+    this._hudPanelTapZone = null; // { x, y, w, h }
+    this._hudPanelTapped = false;
+
     if (canvas) {
       canvas.addEventListener('touchstart', (e) => this._onTouchStart(e), { passive: false });
       canvas.addEventListener('touchmove', (e) => this._onTouchMove(e), { passive: false });
       canvas.addEventListener('touchend', (e) => this._onTouchEnd(e), { passive: false });
       canvas.addEventListener('touchcancel', (e) => this._onTouchEnd(e), { passive: false });
+      // Mouse click for wallet button + HUD panel toggle (desktop portrait mode)
+      canvas.addEventListener('click', (e) => {
+        const rect = this._canvas.getBoundingClientRect();
+        const px = (e.clientX - rect.left) * (this._vw / rect.width);
+        const py = (e.clientY - rect.top) * (270 / rect.height);
+        if (this._hudPanelTapZone) {
+          const z = this._hudPanelTapZone;
+          if (px >= z.x && px <= z.x + z.w && py >= z.y && py <= z.y + z.h) {
+            this._hudPanelTapped = true;
+            return;
+          }
+        }
+        if (this._walletTapZone) {
+          const z = this._walletTapZone;
+          if (px >= z.x && px <= z.x + z.w && py >= z.y && py <= z.y + z.h) {
+            this._walletTapped = true;
+          }
+        }
+      });
     }
   }
 
@@ -162,8 +189,10 @@ export class Input {
     // Scale rx offsets too so buttons don't clip off the right edge
     const btns = this._touchButtons;
     const atkR = Math.round(btns[0].r * s);
+    // In portrait, push buttons up to clear SOL ticker at the bottom
+    const bottomEdge = this._portrait ? 248 : 270;
     btns[0].x = vw - Math.round(btns[0].rx * s);
-    btns[0].y = 270 - atkR - gap;
+    btns[0].y = bottomEdge - atkR - gap;
 
     const midR = Math.round(btns[1].r * s);
     const midY = btns[0].y - atkR - midR - gap;
@@ -217,6 +246,24 @@ export class Input {
         const z = this._dialogueTapZone;
         if (p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) {
           this._pressed.attack = true;
+          continue;
+        }
+      }
+
+      // Wallet button tap zone (check before panel — wallet is inside panel area)
+      if (this._walletTapZone) {
+        const z = this._walletTapZone;
+        if (p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) {
+          this._walletTapped = true;
+          continue;
+        }
+      }
+
+      // HUD panel tap zone (collapsible portrait HUD)
+      if (this._hudPanelTapZone) {
+        const z = this._hudPanelTapZone;
+        if (p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) {
+          this._hudPanelTapped = true;
           continue;
         }
       }
@@ -336,47 +383,54 @@ export class Input {
 
     ctx.save();
 
+    const tsc = this._touchScale || 1;
+    // On small portrait screens (low touch scale), slightly dim idle controls
+    const small = tsc < 0.85;
+    const idleDim = small ? 0.75 : 1; // multiplier for idle alpha values
+
     // ── D-pad (floating joystick) ──
     const dpadActive = this._dpadTouch !== null && this._dpadOrigin;
     const dp = dpadActive ? this._dpadOrigin : this._dpadCenter;
     const dr = this._dpadRadius;
 
-    // Base ring — shows where the joystick is (or its idle position)
-    ctx.globalAlpha = dpadActive ? 0.25 : 0.15;
-    ctx.strokeStyle = '#888';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(dp.x, dp.y, dr, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Inner deadzone dot
-    ctx.globalAlpha = dpadActive ? 0.2 : 0.1;
-    ctx.fillStyle = '#666';
-    ctx.beginPath();
-    ctx.arc(dp.x, dp.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Direction arrows at cardinal positions
-    const tsc = this._touchScale || 1;
-    const arrowDist = dr * 0.65;
-    const arrowSize = Math.round(5 * tsc);
-    const arrows = [
-      { dir: 'up',    ax: 0, ay: -1 },
-      { dir: 'down',  ax: 0, ay: 1 },
-      { dir: 'left',  ax: -1, ay: 0 },
-      { dir: 'right', ax: 1, ay: 0 },
-    ];
-    for (const arr of arrows) {
-      const active = !!this._touchHeld[arr.dir];
-      ctx.globalAlpha = active ? 0.7 : 0.2;
-      ctx.fillStyle = active ? '#fff' : '#999';
-      const cx = dp.x + arr.ax * arrowDist;
-      const cy = dp.y + arr.ay * arrowDist;
+    // On small screens, hide d-pad entirely when idle — it appears on touch
+    if (dpadActive || !small) {
+      // Base ring
+      ctx.globalAlpha = dpadActive ? 0.25 : 0.15 * idleDim;
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(cx + arr.ax * arrowSize, cy + arr.ay * arrowSize);
-      ctx.lineTo(cx + arr.ay * arrowSize * 0.6, cy - arr.ax * arrowSize * 0.6);
-      ctx.lineTo(cx - arr.ay * arrowSize * 0.6, cy + arr.ax * arrowSize * 0.6);
+      ctx.arc(dp.x, dp.y, dr, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Inner deadzone dot
+      ctx.globalAlpha = dpadActive ? 0.2 : 0.1 * idleDim;
+      ctx.fillStyle = '#666';
+      ctx.beginPath();
+      ctx.arc(dp.x, dp.y, 4, 0, Math.PI * 2);
       ctx.fill();
+
+      // Direction arrows at cardinal positions
+      const arrowDist = dr * 0.65;
+      const arrowSize = Math.round(5 * tsc);
+      const arrows = [
+        { dir: 'up',    ax: 0, ay: -1 },
+        { dir: 'down',  ax: 0, ay: 1 },
+        { dir: 'left',  ax: -1, ay: 0 },
+        { dir: 'right', ax: 1, ay: 0 },
+      ];
+      for (const arr of arrows) {
+        const active = !!this._touchHeld[arr.dir];
+        ctx.globalAlpha = active ? 0.7 : 0.2 * idleDim;
+        ctx.fillStyle = active ? '#fff' : '#999';
+        const cx = dp.x + arr.ax * arrowDist;
+        const cy = dp.y + arr.ay * arrowDist;
+        ctx.beginPath();
+        ctx.moveTo(cx + arr.ax * arrowSize, cy + arr.ay * arrowSize);
+        ctx.lineTo(cx + arr.ay * arrowSize * 0.6, cy - arr.ax * arrowSize * 0.6);
+        ctx.lineTo(cx - arr.ay * arrowSize * 0.6, cy + arr.ax * arrowSize * 0.6);
+        ctx.fill();
+      }
     }
 
     // Thumb knob — follows finger direction, clamped to ring radius
@@ -391,7 +445,6 @@ export class Input {
         Math.round(8 * tsc), 0, Math.PI * 2
       );
       ctx.fill();
-      // Bright center
       ctx.globalAlpha = 0.3;
       ctx.fillStyle = '#fff';
       ctx.beginPath();
@@ -404,20 +457,20 @@ export class Input {
     }
 
     // ── Action buttons ──
-    const ts = this._touchScale || 1;
+    const ts = tsc;
     for (const btn of this._touchButtons) {
       const active = !!this._touchHeld[btn.action];
       const br = Math.round(btn.r * ts);
 
       // Button circle
-      ctx.globalAlpha = active ? 0.5 : 0.2;
+      ctx.globalAlpha = active ? 0.5 : 0.18 * idleDim;
       ctx.fillStyle = btn.color;
       ctx.beginPath();
       ctx.arc(btn.x, btn.y, br, 0, Math.PI * 2);
       ctx.fill();
 
       // Border
-      ctx.globalAlpha = active ? 0.7 : 0.3;
+      ctx.globalAlpha = active ? 0.7 : 0.35 * idleDim;
       ctx.strokeStyle = btn.color;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -425,7 +478,7 @@ export class Input {
       ctx.stroke();
 
       // Label
-      ctx.globalAlpha = active ? 0.9 : 0.45;
+      ctx.globalAlpha = active ? 0.9 : 0.45 * idleDim;
       ctx.fillStyle = '#fff';
       ctx.font = `bold ${Math.round(6 * ts)}px monospace`;
       ctx.textAlign = 'center';

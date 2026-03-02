@@ -1,6 +1,11 @@
 export class ParticleSystem {
   constructor() {
     this.particles = [];
+    this._pool = [];
+  }
+
+  _acquire() {
+    return this._pool.length > 0 ? this._pool.pop() : {};
   }
 
   emit(config) {
@@ -18,17 +23,18 @@ export class ParticleSystem {
       const a = angle - spread / 2 + Math.random() * spread;
       const speed = speedMin + Math.random() * (speedMax - speedMin);
       const c = colors ? colors[Math.floor(Math.random() * colors.length)] : color;
-      this.particles.push({
-        x, y,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed,
-        size: sizeMin + Math.random() * (sizeMax - sizeMin),
-        life: life + (Math.random() - 0.5) * lifeVariance,
-        maxLife: life,
-        color: c,
-        gravity,
-        friction
-      });
+      const p = this._acquire();
+      p.x = x;
+      p.y = y;
+      p.vx = Math.cos(a) * speed;
+      p.vy = Math.sin(a) * speed;
+      p.size = sizeMin + Math.random() * (sizeMax - sizeMin);
+      p.life = life + (Math.random() - 0.5) * lifeVariance;
+      p.maxLife = life;
+      p.color = c;
+      p.gravity = gravity;
+      p.friction = friction;
+      this.particles.push(p);
     }
   }
 
@@ -43,6 +49,7 @@ export class ParticleSystem {
       p.y += p.vy * dt;
       p.life -= dt;
       if (p.life <= 0) {
+        this._pool.push(p);
         // Swap-and-pop: O(1) removal
         this.particles[i] = this.particles[this.particles.length - 1];
         this.particles.pop();
@@ -64,6 +71,7 @@ export class ParticleSystem {
   }
 
   clear() {
-    this.particles = [];
+    for (let i = 0; i < this.particles.length; i++) this._pool.push(this.particles[i]);
+    this.particles.length = 0;
   }
 }

@@ -159,6 +159,24 @@ export class AISystem {
     // Cooldown
     if (ai.attackCooldownTimer > 0) ai.attackCooldownTimer -= dt;
 
+    // ── Alert state (universal for all enemy types) ──
+    // Enemies pause and show "!" before engaging, giving the player time to prepare
+    if (ai.state === 'alert') {
+      vel.x = 0;
+      vel.y = 0;
+      // Face the player during alert
+      const aDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
+      ai.facingX = aDir.x;
+      ai.facingY = aDir.y;
+      ai._alertTimer -= dt;
+      if (ai._alertTimer <= 0) {
+        // Alert finished — transition to active behavior
+        ai.state = ai.type === 'scientist' ? 'flee' : 'chase';
+        if (ai.type === 'scientist') ai.alarmTimer = 3.0;
+      }
+      return;
+    }
+
     // Type-specific dispatching
     switch (ai.type) {
       case 'scientist':
@@ -188,7 +206,7 @@ export class AISystem {
         vel.y = 0;
         ai.stateTimer -= dt;
         if (dist < ai.detectionRange) {
-          ai.state = 'chase';
+          this.triggerAlert(ai, playerPos, pos);
         } else if (ai.stateTimer <= 0) {
           ai.state = 'patrol';
         }
@@ -197,7 +215,7 @@ export class AISystem {
       case 'patrol':
         this.patrol(dt, ai, pos, vel);
         if (dist < ai.detectionRange) {
-          ai.state = 'chase';
+          this.triggerAlert(ai, playerPos, pos);
         }
         break;
 
@@ -208,14 +226,17 @@ export class AISystem {
           const strafe = Math.sin(performance.now() * 0.004) * 0.6;
           vel.x = (away.x + (-away.y) * strafe) * ai.speed;
           vel.y = (away.y + away.x * strafe) * ai.speed;
-          ai.facingX = playerPos.x > pos.x ? 1 : -1;
+          const toP = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
+          ai.facingX = toP.x;
+          ai.facingY = toP.y;
           // Dash in when cooldown ready
           if (ai.attackCooldownTimer <= 0 && dist > 16) {
             ai.state = 'attack_windup';
             ai.stateTimer = ai.attackWindup * 0.55;
             const atkDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
             ai._attackDir = atkDir;
-            ai.facingX = atkDir.x > 0 ? 1 : -1;
+            ai.facingX = atkDir.x;
+            ai.facingY = atkDir.y;
             vel.x = 0; vel.y = 0;
           }
         } else {
@@ -225,7 +246,8 @@ export class AISystem {
             ai.stateTimer = ai.attackWindup;
             const atkDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
             ai._attackDir = atkDir;
-            ai.facingX = atkDir.x > 0 ? 1 : -1;
+            ai.facingX = atkDir.x;
+            ai.facingY = atkDir.y;
             vel.x = 0;
             vel.y = 0;
           } else if (dist > ai.detectionRange * 1.5) {
@@ -307,8 +329,7 @@ export class AISystem {
         vel.x = 0; vel.y = 0;
         ai.stateTimer -= dt;
         if (dist < ai.detectionRange) {
-          ai.state = 'flee';
-          ai.alarmTimer = 3.0;
+          this.triggerAlert(ai, playerPos, pos);
         } else if (ai.stateTimer <= 0) {
           ai.stateTimer = 2 + Math.random() * 2;
         }
@@ -319,7 +340,8 @@ export class AISystem {
         const dir = Physics.direction(playerPos.x, playerPos.y, pos.x, pos.y);
         vel.x = dir.x * ai.speed;
         vel.y = dir.y * ai.speed;
-        ai.facingX = dir.x > 0 ? 1 : -1;
+        ai.facingX = dir.x;
+        ai.facingY = dir.y;
         // Alarm countdown
         if (!ai.alarmTriggered) {
           ai.alarmTimer -= dt;
@@ -362,7 +384,7 @@ export class AISystem {
       case 'patrol':
         vel.x = 0; vel.y = 0;
         if (dist < ai.detectionRange) {
-          ai.state = 'chase';
+          this.triggerAlert(ai, playerPos, pos);
         }
         break;
 
@@ -382,7 +404,8 @@ export class AISystem {
           vel.x = -dirToPlayer.y * ai.speed * 0.4;
           vel.y = dirToPlayer.x * ai.speed * 0.4;
         }
-        ai.facingX = dirToPlayer.x > 0 ? 1 : -1;
+        ai.facingX = dirToPlayer.x;
+        ai.facingY = dirToPlayer.y;
 
         // Shoot timer
         ai.shootTimer -= dt;
@@ -417,7 +440,7 @@ export class AISystem {
       case 'idle':
         vel.x = 0; vel.y = 0;
         ai.stateTimer -= dt;
-        if (dist < ai.detectionRange) ai.state = 'chase';
+        if (dist < ai.detectionRange) this.triggerAlert(ai, playerPos, pos);
         else if (ai.stateTimer <= 0) {
           ai.state = 'patrol';
           ai.stateTimer = 3;
@@ -426,7 +449,7 @@ export class AISystem {
 
       case 'patrol':
         this.patrol(dt, ai, pos, vel);
-        if (dist < ai.detectionRange) ai.state = 'chase';
+        if (dist < ai.detectionRange) this.triggerAlert(ai, playerPos, pos);
         break;
 
       case 'chase': {
@@ -439,7 +462,8 @@ export class AISystem {
         }
         vel.x = dir.x * ai.speed + (-dir.y) * ai.zigzagDir * ai.speed * 0.5;
         vel.y = dir.y * ai.speed + dir.x * ai.zigzagDir * ai.speed * 0.5;
-        ai.facingX = dir.x > 0 ? 1 : -1;
+        ai.facingX = dir.x;
+        ai.facingY = dir.y;
 
         if (dist < ai.attackRange && ai.attackCooldownTimer <= 0) {
           // Lunge attack
@@ -573,13 +597,13 @@ export class AISystem {
       case 'idle':
         vel.x = 0; vel.y = 0;
         ai.stateTimer -= dt;
-        if (dist < ai.detectionRange) ai.state = 'chase';
+        if (dist < ai.detectionRange) this.triggerAlert(ai, playerPos, pos);
         else if (ai.stateTimer <= 0) ai.state = 'patrol';
         break;
 
       case 'patrol':
         this.patrol(dt, ai, pos, vel);
-        if (dist < ai.detectionRange) ai.state = 'chase';
+        if (dist < ai.detectionRange) this.triggerAlert(ai, playerPos, pos);
         break;
 
       case 'chase':
@@ -590,13 +614,16 @@ export class AISystem {
             ai.state = 'dash_windup';
             ai.stateTimer = 0.3;
             ai._dashDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
+            ai.facingX = ai._dashDir.x;
+            ai.facingY = ai._dashDir.y;
             vel.x = 0; vel.y = 0;
           } else {
             ai.state = 'attack_windup';
             ai.stateTimer = ai.attackWindup;
             ai.comboCount = 0;
             ai._attackDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
-            ai.facingX = ai._attackDir.x > 0 ? 1 : -1;
+            ai.facingX = ai._attackDir.x;
+            ai.facingY = ai._attackDir.y;
             vel.x = 0; vel.y = 0;
           }
         } else if (dist > ai.detectionRange * 1.5) {
@@ -640,13 +667,16 @@ export class AISystem {
         break;
 
       case 'attack_active': {
-        const cad = ai._attackDir || { x: ai.facingX, y: 0 };
+        const cad = ai._attackDir || { x: ai.facingX, y: ai.facingY || 0 };
         vel.x = cad.x * 50;
         vel.y = cad.y * 50;
         ai.stateTimer -= dt;
         if (ai.stateTimer <= 0) {
-          // Continue combo?
+          // Continue combo? Re-aim at player between hits
           if (ai.comboCount < ai.comboMax) {
+            ai._attackDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
+            ai.facingX = ai._attackDir.x;
+            ai.facingY = ai._attackDir.y;
             ai.state = 'attack_windup';
             ai.stateTimer = ai.attackWindup * 0.6; // Faster combo windups
           } else {
@@ -742,7 +772,7 @@ export class AISystem {
     switch (ai.state) {
       case 'idle':
         vel.x = 0; vel.y = 0;
-        if (dist < ai.detectionRange) ai.state = 'chase';
+        if (dist < ai.detectionRange) this.triggerAlert(ai, playerPos, pos);
         break;
 
       case 'chase': {
@@ -761,7 +791,8 @@ export class AISystem {
             vel.x = -dir.y * ai.speed * 0.5;
             vel.y = dir.x * ai.speed * 0.5;
           }
-          ai.facingX = dir.x > 0 ? 1 : -1;
+          ai.facingX = dir.x;
+          ai.facingY = dir.y;
 
           ai.shootTimer -= dt;
           if (ai.shootTimer <= 0) {
@@ -783,7 +814,8 @@ export class AISystem {
             vel.x = dir.x * ai.speed * 0.5;
             vel.y = dir.y * ai.speed * 0.5;
           }
-          ai.facingX = dir.x > 0 ? 1 : -1;
+          ai.facingX = dir.x;
+          ai.facingY = dir.y;
 
           ai.shootTimer -= dt;
           if (ai.shootTimer <= 0) {
@@ -828,7 +860,8 @@ export class AISystem {
             ai.state = 'attack_windup';
             ai.stateTimer = ai.attackWindup;
             ai._attackDir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
-            ai.facingX = ai._attackDir.x > 0 ? 1 : -1;
+            ai.facingX = ai._attackDir.x;
+            ai.facingY = ai._attackDir.y;
             vel.x = 0; vel.y = 0;
           }
         }
@@ -989,19 +1022,38 @@ export class AISystem {
 
     vel.x = (dx / dist) * ai.speed * 0.5;
     vel.y = (dy / dist) * ai.speed * 0.5;
-    ai.facingX = dx > 0 ? 1 : -1;
+    ai.facingX = dx / dist;
+    ai.facingY = dy / dist;
+  }
+
+  triggerAlert(ai, playerPos, pos) {
+    // Already alerted — go straight to chase
+    if (ai._alerted) {
+      ai.state = ai.type === 'scientist' ? 'flee' : 'chase';
+      if (ai.type === 'scientist') ai.alarmTimer = 3.0;
+      return;
+    }
+    ai._alerted = true;
+    ai.state = 'alert';
+    ai._alertTimer = 2.0 + Math.random() * 1.0; // 2-3 seconds, staggered
+    ai._alertStart = performance.now();
+    // Face the player
+    const d = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
+    ai.facingX = d.x;
+    ai.facingY = d.y;
   }
 
   chase(dt, ai, pos, vel, playerPos) {
     const dir = Physics.direction(pos.x, pos.y, playerPos.x, playerPos.y);
     vel.x = dir.x * ai.speed;
     vel.y = dir.y * ai.speed;
-    if (dir.x !== 0) ai.facingX = dir.x > 0 ? 1 : -1;
+    ai.facingX = dir.x;
+    ai.facingY = dir.y;
   }
 
   spawnEnemyHitbox(ownerId, pos, ai, state) {
     if (!state.combatSystem) return;
-    const ad = ai._attackDir || ai._lungeDir || { x: ai.facingX, y: 0 };
+    const ad = ai._attackDir || ai._lungeDir || { x: ai.facingX || 1, y: ai.facingY || 0 };
     const s = ai._scale || 1;
     const hx = pos.x + ad.x * 12 * s;
     const hy = pos.y + ad.y * 12 * s;

@@ -62,44 +62,48 @@ export class DialogueBox {
     }
   }
 
-  render(ctx, vw) {
+  render(ctx, vw, vh) {
     if (!this.visible) return;
 
     ctx.save();
 
-    // Adjust width to fill screen
-    const bw = (vw || 480) - this.boxX * 2;
+    // On narrow screens (portrait mobile), collapse margins to fill width
+    const w = vw || 480;
+    const margin = w < 200 ? 2 : this.boxX;
+    const bw = w - margin * 2;
+    const bx = margin;
+    const by = (vh && vh < 270) ? vh - this.boxH - 4 : this.boxY;
 
     // Semi-transparent dark background
     ctx.fillStyle = 'rgba(8, 6, 16, 0.88)';
-    ctx.fillRect(this.boxX, this.boxY, bw, this.boxH);
+    ctx.fillRect(bx, by, bw, this.boxH);
 
     // Pixel border
     ctx.strokeStyle = 'rgba(100, 200, 255, 0.6)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(this.boxX + 0.5, this.boxY + 0.5, bw - 1, this.boxH - 1);
+    ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, this.boxH - 1);
 
     // Inner border highlight
     ctx.strokeStyle = 'rgba(100, 200, 255, 0.2)';
-    ctx.strokeRect(this.boxX + 2.5, this.boxY + 2.5, bw - 5, this.boxH - 5);
+    ctx.strokeRect(bx + 2.5, by + 2.5, bw - 5, this.boxH - 5);
 
     // Character name
     if (this.name) {
       ctx.fillStyle = this.nameColor;
       ctx.font = '10px monospace';
       ctx.textBaseline = 'top';
-      ctx.fillText(this.name, this.boxX + this.padding, this.boxY + this.padding);
+      ctx.fillText(this.name, bx + this.padding, by + this.padding);
 
       // Name underline
       const nameW = ctx.measureText(this.name).width;
       ctx.fillStyle = this.nameColor;
       ctx.globalAlpha = 0.4;
-      ctx.fillRect(this.boxX + this.padding, this.boxY + this.padding + 11, nameW, 1);
+      ctx.fillRect(bx + this.padding, by + this.padding + 11, nameW, 1);
       ctx.globalAlpha = 1;
     }
 
     // Typewriter text
-    const textY = this.boxY + this.padding + (this.name ? this.nameHeight + 4 : 0);
+    const textY = by + this.padding + (this.name ? this.nameHeight + 4 : 0);
     const displayText = this.fullText.substring(0, this.displayedChars);
 
     ctx.fillStyle = '#ccd';
@@ -110,12 +114,12 @@ export class DialogueBox {
     const maxW = bw - this.padding * 2;
     const lines = this.wrapText(ctx, displayText, maxW);
     for (let i = 0; i < lines.length && i < 3; i++) {
-      ctx.fillText(lines[i], this.boxX + this.padding, textY + i * 11);
+      ctx.fillText(lines[i], bx + this.padding, textY + i * 11);
     }
 
     // Button hint — show what to press/tap
-    const hintX = this.boxX + bw - this.padding;
-    const hintY = this.boxY + this.boxH - 10;
+    const hintX = bx + bw - this.padding;
+    const hintY = by + this.boxH - 10;
 
     if (this._complete) {
       // Text finished — show "continue" hint

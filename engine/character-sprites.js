@@ -7,6 +7,11 @@ const CHAR_TYPES = [
   'player', 'security_guard', 'scientist', 'riot_soldier',
   'lab_mutant', 'drone', 'mech_soldier', 'commander', 'warden',
   'commander_mutated', 'warden_mutated',
+  // Boss variants (v1-v6)
+  ...Array.from({ length: 6 }, (_, i) => `commander_v${i + 1}`),
+  ...Array.from({ length: 6 }, (_, i) => `commander_mutated_v${i + 1}`),
+  ...Array.from({ length: 6 }, (_, i) => `warden_v${i + 1}`),
+  ...Array.from({ length: 6 }, (_, i) => `warden_mutated_v${i + 1}`),
 ];
 const DIRS = ['south', 'north', 'east', 'west'];
 
@@ -14,7 +19,7 @@ const PICKUP_NAMES = [
   'health_kit',
   'baton', 'pipe', 'fire_extinguisher', 'stun_rod', 'shiv', 'scalpel', 'chair', 'beaker',
   'damage_boost', 'speed_boost', 'combo_extend', 'durability_up', 'iframe_extend', 'double_dash', 'max_hp_up',
-  'barrel',
+  'barrel', 'flashlight',
 ];
 
 // { type: { south, north, east, west } } — populated by loadAllSprites()

@@ -23,6 +23,7 @@ export function createCommander(ecs, x, y) {
     patrolPointB: { x: x + 50, y },
     patrolTarget: 'B',
     isBoss: true,
+    _variant: Math.floor(Math.random() * 7), // 0 = original, 1-6 = variants
     // Phase system
     phase: 1,
     comboCount: 0,
@@ -62,6 +63,7 @@ export function createWarden(ecs, x, y) {
     patrolPointB: { x: x + 60, y },
     patrolTarget: 'B',
     isBoss: true,
+    _variant: Math.floor(Math.random() * 7), // 0 = original, 1-6 = variants
     // Phase system
     phase: 1,
     shootTimer: 2.0,

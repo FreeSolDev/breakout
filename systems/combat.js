@@ -74,6 +74,13 @@ export class CombatSystem {
 
     // Handle active attack states
     if (player.state.startsWith('attack_') || player.state === 'attack_windup') {
+      // currentAttack can be nulled mid-frame by hit processing — bail out
+      if (!player.currentAttack) {
+        player.state = 'idle';
+        player.attackPhase = null;
+        player.comboStep = 0;
+        return;
+      }
       player.attackTimer -= dt;
 
       // Windup phase
@@ -146,7 +153,7 @@ export class CombatSystem {
       if (combat?.weapon?.throwable) {
         this.throwWeapon(id, player, pos, vel, combat, ecs, state);
       } else {
-        this.startHeavyAttack(player, vel, combat);
+        this.startHeavyAttack(player, vel, combat, pos, state);
       }
     }
   }
@@ -185,7 +192,7 @@ export class CombatSystem {
     }
   }
 
-  startHeavyAttack(player, vel, combat) {
+  startHeavyAttack(player, vel, combat, pos, state) {
     const weapon = combat ? combat.weapon : null;
     const speedMult = weapon ? weapon.speedMult : 1;
     const atk = ATTACKS.heavy;
@@ -197,6 +204,31 @@ export class CombatSystem {
     vel.y = 0;
     player.attackPhase = 'windup';
     player.attackTimer = atk.windup / speedMult;
+
+    // Charge-up particles: spawn at a ring around player, converge inward
+    if (state && state.particles && pos) {
+      const ring = 18;
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        const ox = Math.cos(a) * ring;
+        const oy = Math.sin(a) * ring;
+        state.particles.emit({
+          x: pos.x + ox, y: pos.y + oy,
+          count: 1,
+          speedMin: 70, speedMax: 90,
+          angle: a + Math.PI,
+          spread: 0.3,
+          colors: ['#f80', '#fc0', '#fff'],
+          life: 0.2,
+          sizeMin: 1, sizeMax: 2,
+        });
+      }
+    }
+
+    // Camera micro-pull in facing direction
+    if (state && state.camera) {
+      state.camera.punch(player.facingDirX, player.facingDirY, 3);
+    }
   }
 
   spawnHitbox(ownerId, pos, player, combat, state) {
@@ -424,6 +456,7 @@ export class CombatSystem {
     ecs.add(pid, 'collider', { offsetX: -4, offsetY: -4, w: 8, h: 8 });
     ecs.add(pid, 'projectile', {
       weaponType: weapon.type,
+      throwType: weapon.throwType || null,
       owner: playerId,
       damage: ATTACKS.heavy.damage * (combat.damage || 1) * weapon.damageMult,
       radius: 28,
@@ -497,10 +530,14 @@ export class CombatSystem {
     const { particles } = state;
     const r = proj.radius;
     const isAcid = proj.weaponType === 'beaker';
+    const isExtinguisher = proj.throwType === 'extinguisher';
+
+    // Extinguisher uses a wider blast radius for freeze + fire extinguish
+    const blastRadius = isExtinguisher ? 40 : r;
 
     // Hitbox centered on explosion, hits all enemies in radius
     const explosionHitbox = {
-      x: pos.x - r, y: pos.y - r, w: r * 2, h: r * 2,
+      x: pos.x - blastRadius, y: pos.y - blastRadius, w: blastRadius * 2, h: blastRadius * 2,
       damage: proj.damage,
       type: 'explosion',
       damageType: isAcid ? 'sharp' : 'blunt',
@@ -511,7 +548,7 @@ export class CombatSystem {
       hitEntities: new Set(),
     };
 
-    const enemies = [...ecs.queryTag('enemy')];
+    const enemies = ecs.queryTag('enemy');
     for (const eid of enemies) {
       const epos = ecs.get(eid, 'position');
       const ecol = ecs.get(eid, 'collider');
@@ -524,7 +561,31 @@ export class CombatSystem {
     }
 
     // Visual effects based on weapon type
-    if (isAcid) {
+    if (isExtinguisher) {
+      // Freeze blast — extinguish nearby fire and spawn frost particles
+      if (state.fireSystem) {
+        state.fireSystem.extinguishNear(pos.x, pos.y, 50);
+      }
+      spawnHitEffect('hit_heavy', pos.x, pos.y);
+      if (particles) {
+        // Frost burst — white/cyan particles radiating outward
+        particles.emit({
+          x: pos.x, y: pos.y, count: 25,
+          speedMin: 50, speedMax: 140,
+          colors: ['#fff', '#cef', '#8df', '#4cf', '#aef'],
+          life: 0.5, sizeMin: 1, sizeMax: 3,
+          spread: Math.PI * 2,
+        });
+        // Secondary frost mist — slower, larger
+        particles.emit({
+          x: pos.x, y: pos.y, count: 10,
+          speedMin: 15, speedMax: 40,
+          colors: ['#cef', '#fff'],
+          life: 0.6, sizeMin: 2, sizeMax: 4,
+          spread: Math.PI * 2,
+        });
+      }
+    } else if (isAcid) {
       spawnHitEffect('hit_burn', pos.x, pos.y);
       if (particles) {
         particles.emit({
@@ -738,7 +799,7 @@ export class CombatSystem {
             if (vel) { vel.x = (attackFromX > 0 ? -1 : 1) * 30; }
             if (pos && particles) {
               particles.emit({
-                x: pos.x + ai.facingX * 8, y: pos.y,
+                x: pos.x + (ai.facingX > 0 ? 1 : -1) * 8, y: pos.y,
                 count: 5, speedMin: 30, speedMax: 80,
                 colors: ['#fff', '#aaf', '#88f'],
                 life: 0.2, sizeMin: 1, sizeMax: 2,
@@ -798,6 +859,8 @@ export class CombatSystem {
 
     // Set enemy to hurt state if it has ai component
     if (ai) {
+      // Getting hit cancels alert and marks as alerted
+      if (!ai._alerted) ai._alerted = true;
       if (health && health.current <= 0) {
         ai.state = 'dead';
         ai.stateTimer = 0.5;

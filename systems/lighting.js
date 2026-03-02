@@ -113,6 +113,12 @@ export class LightingSystem {
       const pos = state.ecs.get(state.playerId, 'position');
       if (pos) {
         this._drawCachedLight(lc, pos.x + ox, pos.y + oy, 50, 'rgba(180, 200, 255, 0.3)', 1);
+
+        // Flashlight cone (portrait mode only)
+        const player = state.ecs.get(state.playerId, 'player');
+        if (player && player.hasFlashlight && state.portrait) {
+          this._drawFlashlightCone(lc, pos.x + ox, pos.y + oy, player.facingDirX, player.facingDirY);
+        }
       }
     }
 
@@ -136,6 +142,14 @@ export class LightingSystem {
       this.projectileLights = null;
     }
 
+    // Fire hazard lights
+    if (this.fireLights) {
+      for (const fl of this.fireLights) {
+        this._drawCachedLight(lc, fl.x + ox, fl.y + oy, 35, 'rgba(255, 140, 40, 0.55)', fl.intensity);
+      }
+      this.fireLights = null;
+    }
+
     // Composite light map over game with multiply
     lc.globalCompositeOperation = 'source-over';
     ctx.save();
@@ -143,6 +157,47 @@ export class LightingSystem {
     ctx.globalCompositeOperation = 'multiply';
     ctx.drawImage(this.canvas, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+
+  // Get or create cached flashlight cone brush (cone-shaped radial gradient)
+  _getConeBrush() {
+    if (this._coneBrush) return this._coneBrush;
+    const r = 48; // half of 96
+    const d = r * 2;
+    const c = document.createElement('canvas');
+    c.width = d;
+    c.height = d;
+    const gc = c.getContext('2d');
+    // Draw a 60° cone pointing right (will be rotated per-frame)
+    gc.save();
+    gc.translate(r, r);
+    gc.beginPath();
+    gc.moveTo(0, 0);
+    gc.arc(0, 0, r, -Math.PI / 6, Math.PI / 6);
+    gc.closePath();
+    gc.clip();
+    // Radial gradient fills the clipped cone
+    const grad = gc.createRadialGradient(0, 0, 0, 0, 0, r);
+    grad.addColorStop(0, 'rgba(255, 250, 220, 0.7)');
+    grad.addColorStop(0.4, 'rgba(255, 240, 200, 0.45)');
+    grad.addColorStop(1, 'rgba(255, 230, 180, 0)');
+    gc.fillStyle = grad;
+    gc.fillRect(-r, -r, d, d);
+    gc.restore();
+    this._coneBrush = c;
+    return c;
+  }
+
+  // Draw directional flashlight cone at player position
+  _drawFlashlightCone(ctx, x, y, fx, fy) {
+    const brush = this._getConeBrush();
+    const angle = Math.atan2(fy, fx);
+    ctx.save();
+    ctx.translate(Math.round(x), Math.round(y));
+    ctx.rotate(angle);
+    // Brush is centered: cone points right from center
+    ctx.drawImage(brush, -48, -48);
     ctx.restore();
   }
 

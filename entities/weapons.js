@@ -23,7 +23,7 @@ export const WEAPON_DEFS = {
   },
   fire_extinguisher: {
     name: 'Fire Ext.',
-    desc: 'Freezes enemies · Heavy',
+    desc: 'Throw to freeze · Extinguish',
     damageMult: 2.0,
     speedMult: 0.6,
     range: 1.2,
@@ -31,6 +31,8 @@ export const WEAPON_DEFS = {
     color: '#e33',
     comboMax: 3,
     damageType: 'blunt',
+    throwable: true,
+    throwType: 'extinguisher',
     statusEffect: { type: 'freeze', duration: 2.0 },
   },
   stun_rod: {
